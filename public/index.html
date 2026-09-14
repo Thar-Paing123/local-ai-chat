@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Local Code Assistant</title>
+  <link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+  <div id="app">
+    <aside id="sidebar">
+      <div class="sidebar-head">
+        <span class="brand">Code Assistant</span>
+        <span id="status" class="dot" title="checking model server…"></span>
+      </div>
+
+      <button id="new-chat" class="new-chat">+ New chat</button>
+      <div id="thread-list"></div>
+
+      <div class="sidebar-foot">
+        <details class="settings">
+          <summary>Settings</summary>
+
+          <div class="field">
+            <label for="model">Model</label>
+            <select id="model"></select>
+          </div>
+
+          <div class="field">
+            <label for="temp">Temperature</label>
+            <div class="row">
+              <input id="temp" type="range" min="0" max="1.5" step="0.05">
+              <span id="temp-val" class="val"></span>
+            </div>
+          </div>
+
+          <div class="field">
+            <label for="max-tokens">Max tokens</label>
+            <input id="max-tokens" type="number" min="64" max="16384" step="64">
+          </div>
+
+          <div class="field">
+            <label for="system">System prompt</label>
+            <textarea id="system" spellcheck="false"></textarea>
+          </div>
+        </details>
+        <div id="backend" class="backend"></div>
+      </div>
+    </aside>
+
+    <main id="main">
+      <div id="banner" hidden></div>
+      <div id="messages"></div>
+
+      <div id="composer">
+        <div class="composer-inner">
+          <div id="attachments" class="attachments"></div>
+          <div class="input-wrap">
+            <textarea id="prompt" rows="1" placeholder="Ask about code, paste a stack trace, attach a file…" spellcheck="false"></textarea>
+            <button id="attach" class="icon-btn" title="Attach file as context">📎</button>
+            <button id="send" class="icon-btn" title="Send (Enter)">↑</button>
+          </div>
+          <div class="hint">
+            <span><strong>Enter</strong> send</span>
+            <span><strong>Shift+Enter</strong> newline</span>
+            <span>runs locally — nothing leaves this Mac</span>
+          </div>
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <input id="file" type="file" multiple hidden
+         accept=".txt,.md,.py,.js,.mjs,.ts,.tsx,.jsx,.json,.sql,.sh,.yml,.yaml,.html,.css,.xml,.go,.rs,.java,.c,.h,.cpp,.toml,.ini,.cfg,.log,.csv">
+  <script type="module" src="./app.js"></script>
+</body>
+</html>

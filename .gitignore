@@ -1,0 +1,14 @@
+.DS_Store
+.env
+.env.*
+!.env.example
+
+# Local model weights and runtime caches
+models/
+logs/
+.cache/
+
+# Node and editor artifacts
+node_modules/
+npm-debug.log*
+.vscode/
