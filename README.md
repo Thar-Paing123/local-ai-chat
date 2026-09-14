@@ -39,6 +39,13 @@ export OPENAI_API_KEY='your-key'
 node server.mjs
 ```
 
+For xAI/Grok, export a replacement key and use the launcher:
+
+```bash
+export XAI_API_KEY='your-key'
+./xai-chat.sh
+```
+
 Do not paste API keys into browser JavaScript, chat messages, screenshots, or
 source files. Provider access is separate from a ChatGPT web subscription.
 
