@@ -15,7 +15,7 @@ const el = (id) => document.getElementById(id);
 const dom = {
   banner: el('banner'), messages: el('messages'), prompt: el('prompt'),
   send: el('send'), threads: el('thread-list'), newChat: el('new-chat'),
-  status: el('status'), modelSel: el('model'), system: el('system'),
+  status: el('status'), providerSel: el('provider'), modelSel: el('model'), system: el('system'),
   temp: el('temp'), tempVal: el('temp-val'), maxTokens: el('max-tokens'),
   backend: el('backend'), attachBtn: el('attach'), fileInput: el('file'),
   attachments: el('attachments'),
@@ -35,10 +35,10 @@ const store = {
   },
 };
 
-let config = { baseUrl: '', model: '', models: [], online: false };
+let config = { providers: [], defaultProvider: 'ollama' };
 let threads = store.get(LS_THREADS, []);
 let activeId = threads[0]?.id ?? null;
-let settings = { system: DEFAULT_SYSTEM, temp: 0.3, maxTokens: 2048, model: '', ...store.get(LS_SETTINGS, {}) };
+let settings = { system: DEFAULT_SYSTEM, temp: 0.3, maxTokens: 2048, provider: '', model: '', ...store.get(LS_SETTINGS, {}) };
 let controller = null;      // aborts an in-flight generation
 let attachments = [];       // [{name, text}]
 
@@ -299,6 +299,7 @@ async function stream(thread) {
       headers: { 'content-type': 'application/json' },
       signal: controller.signal,
       body: JSON.stringify({
+        provider: settings.provider,
         model: settings.model || config.model,
         temperature: Number(settings.temp),
         max_tokens: Number(settings.maxTokens),
@@ -400,36 +401,55 @@ function bindSettings() {
   };
   dom.maxTokens.onchange = () => { settings.maxTokens = Number(dom.maxTokens.value) || 2048; saveSettings(); };
   dom.modelSel.onchange = () => { settings.model = dom.modelSel.value; saveSettings(); };
+  dom.providerSel.onchange = () => {
+    settings.provider = dom.providerSel.value;
+    settings.model = '';
+    saveSettings();
+    renderProviderSettings();
+  };
+}
+
+function renderProviderSettings() {
+  const provider = config.providers.find((item) => item.id === settings.provider) ?? config.providers[0];
+  if (!provider) return;
+  const options = provider.models.length ? provider.models : [provider.model].filter(Boolean);
+  dom.modelSel.replaceChildren(...options.map((model) => {
+    const option = document.createElement('option');
+    option.value = model;
+    option.textContent = model.length > 34 ? `…${model.slice(-33)}` : model;
+    return option;
+  }));
+  if (settings.model && options.includes(settings.model)) dom.modelSel.value = settings.model;
+  else { settings.model = options[0] ?? provider.model; saveSettings(); }
+  dom.backend.textContent = `${provider.label}: ${provider.baseUrl}`;
+  dom.status.className = `dot ${provider.online ? 'online' : 'offline'}`;
+  dom.status.title = provider.online ? `${provider.label} online` : `${provider.label} unavailable or not configured`;
+  dom.banner.hidden = provider.online;
+  if (!provider.online) dom.banner.textContent = provider.id === 'ollama'
+    ? `Ollama is unavailable at ${provider.baseUrl}.`
+    : `${provider.label} is not configured or unavailable. Set its API key before starting the server.`;
 }
 
 async function loadConfig() {
   try {
     config = await (await fetch('/api/config')).json();
   } catch {
-    config = { baseUrl: 'unknown', model: '', models: [], online: false };
+    config = { providers: [], defaultProvider: 'ollama' };
   }
 
-  dom.backend.textContent = `${config.baseUrl}`;
-  dom.status.className = `dot ${config.online ? 'online' : 'offline'}`;
-  dom.status.title = config.online ? 'Model server online' : 'Model server unreachable';
-
-  const options = config.models.length ? config.models : [config.model].filter(Boolean);
-  dom.modelSel.replaceChildren(...options.map((m) => {
-    const o = document.createElement('option');
-    o.value = m;
-    o.textContent = m.length > 34 ? `…${m.slice(-33)}` : m;
-    return o;
+  const providers = config.providers ?? [];
+  dom.providerSel.replaceChildren(...providers.map((provider) => {
+    const option = document.createElement('option');
+    option.value = provider.id;
+    option.textContent = provider.label;
+    return option;
   }));
-  if (settings.model && options.includes(settings.model)) dom.modelSel.value = settings.model;
-  else settings.model = options[0] ?? config.model;
-
-  dom.banner.hidden = config.online;
-  if (!config.online) {
-    dom.banner.innerHTML =
-      `Model server unreachable at <code>${escapeHtml(config.baseUrl)}</code> — start it with ` +
-      `<code>./start-vllm.sh --bg</code>, then <button id="retry" class="chip">retry</button>`;
-    dom.banner.querySelector('#retry').onclick = loadConfig;
+  if (!settings.provider || !providers.some((provider) => provider.id === settings.provider)) {
+    settings.provider = config.defaultProvider ?? providers[0]?.id ?? '';
+    saveSettings();
   }
+  dom.providerSel.value = settings.provider;
+  renderProviderSettings();
 }
 
 // ---------- boot ----------

@@ -10,8 +10,8 @@ PORT="${PORT:-8000}"
 MODEL="${LLM_MODEL:-grok-3-mini}"
 
 echo "Starting local-ai-chat with xAI model: $MODEL"
-LLM_BASE_URL=https://api.x.ai/v1 \
-LLM_API_KEY="$XAI_API_KEY" \
+LLM_PROVIDER=grok \
+XAI_API_KEY="$XAI_API_KEY" \
 LLM_MODEL="$MODEL" \
 PORT="$PORT" \
 node server.mjs

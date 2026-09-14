@@ -19,9 +19,14 @@ import { extname, join, normalize } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const PORT = Number(process.env.PORT ?? 8000);
-const LLM_BASE_URL = (process.env.LLM_BASE_URL ?? 'http://127.0.0.1:11434/v1').replace(/\/$/, '');
-const LLM_MODEL = process.env.LLM_MODEL ?? 'qwen2.5-coder:7b';
-const LLM_API_KEY = process.env.LLM_API_KEY ?? 'ollama';
+const legacyBaseUrl = (process.env.LLM_BASE_URL ?? 'http://127.0.0.1:11434/v1').replace(/\/$/, '');
+const legacyModel = process.env.LLM_MODEL ?? 'qwen2.5-coder:7b';
+const legacyApiKey = process.env.LLM_API_KEY ?? 'ollama';
+const backends = {
+  ollama: { label: 'Ollama', baseUrl: (process.env.OLLAMA_BASE_URL ?? legacyBaseUrl).replace(/\/$/, ''), apiKey: process.env.OLLAMA_API_KEY ?? legacyApiKey, model: process.env.OLLAMA_MODEL ?? legacyModel },
+  grok: { label: 'Grok (xAI)', baseUrl: (process.env.XAI_BASE_URL ?? 'https://api.x.ai/v1').replace(/\/$/, ''), apiKey: process.env.XAI_API_KEY ?? '', model: process.env.XAI_MODEL ?? 'grok-3-mini' },
+  gemini: { label: 'Gemini', baseUrl: (process.env.GEMINI_BASE_URL ?? 'https://generativelanguage.googleapis.com/v1beta/openai').replace(/\/$/, ''), apiKey: process.env.GEMINI_API_KEY ?? '', model: process.env.GEMINI_MODEL ?? 'gemini-2.5-flash' },
+};
 
 const PUBLIC_DIR = join(fileURLToPath(new URL('.', import.meta.url)), 'public');
 
@@ -53,10 +58,11 @@ async function readBody(req, limitBytes = 8 * 1024 * 1024) {
   return Buffer.concat(chunks).toString('utf8');
 }
 
-function upstream(path, init) {
-  return fetch(`${LLM_BASE_URL}${path}`, {
+function upstream(path, init, provider = 'ollama') {
+  const backend = backends[provider] ?? backends.ollama;
+  return fetch(`${backend.baseUrl}${path}`, {
     ...init,
-    headers: { 'content-type': 'application/json', authorization: `Bearer ${LLM_API_KEY}`, ...init?.headers },
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${backend.apiKey}`, ...init?.headers },
   });
 }
 
@@ -87,6 +93,9 @@ async function proxyChat(req, res) {
     return json(res, 400, { error: `bad request: ${err.message}` });
   }
 
+  const provider = payload.provider ?? 'ollama';
+  const backend = backends[provider] ?? backends.ollama;
+  delete payload.provider;
   const controller = new AbortController();
   res.on('close', () => controller.abort());
 
@@ -94,12 +103,12 @@ async function proxyChat(req, res) {
   try {
     upstreamRes = await upstream('/chat/completions', {
       method: 'POST',
-      body: JSON.stringify({ model: LLM_MODEL, ...payload, stream: true }),
+      body: JSON.stringify({ model: backend.model, ...payload, stream: true }),
       signal: controller.signal,
-    });
+    }, provider);
   } catch (err) {
     if (controller.signal.aborted) return;
-    return json(res, 502, { error: `cannot reach model server at ${LLM_BASE_URL} — ${err.message}` });
+    return json(res, 502, { error: `cannot reach ${backend.label} at ${backend.baseUrl} — ${err.message}` });
   }
 
   if (!upstreamRes.ok) {
@@ -131,19 +140,25 @@ const server = createServer(async (req, res) => {
   if (pathname === '/api/chat' && req.method === 'POST') return proxyChat(req, res);
 
   if (pathname === '/api/config') {
-    let models = [];
-    let online = false;
-    try {
-      const r = await upstream('/models', { method: 'GET' });
-      if (r.ok) {
-        models = (await r.json()).data?.map((m) => m.id)
-          .filter((id) => !/(?:embed|embedding)/i.test(id)) ?? [];
-        online = true;
+    const providers = await Promise.all(Object.entries(backends).map(async ([id, backend]) => {
+      let models = [];
+      let online = false;
+      if (backend.apiKey) {
+        try {
+          const r = await upstream('/models', { method: 'GET' }, id);
+          if (r.ok) {
+            models = (await r.json()).data?.map((model) => model.id)
+              .filter((model) => !/(?:embed|embedding)/i.test(model)) ?? [];
+            online = true;
+          }
+        } catch {
+          // backend unavailable
+        }
       }
-    } catch {
-      // server not up yet — the UI shows an offline banner with the hint below
-    }
-    return json(res, 200, { baseUrl: LLM_BASE_URL, model: LLM_MODEL, models, online });
+      if (!models.length && backend.apiKey) models = [backend.model];
+      return { id, label: backend.label, baseUrl: backend.baseUrl, model: backend.model, models, online };
+    }));
+    return json(res, 200, { providers, defaultProvider: process.env.LLM_PROVIDER ?? 'ollama' });
   }
 
   if (req.method === 'GET' || req.method === 'HEAD') return serveStatic(req, res);
@@ -152,5 +167,5 @@ const server = createServer(async (req, res) => {
 
 server.listen(PORT, '127.0.0.1', () => {
   console.log(`local-ai-chat  →  http://localhost:${PORT}`);
-  console.log(`backend        →  ${LLM_BASE_URL}  (model: ${LLM_MODEL})`);
+  console.log(`backends       →  ${Object.values(backends).map(({ label, baseUrl }) => `${label}: ${baseUrl}`).join(' | ')}`);
 });

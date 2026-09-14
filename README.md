@@ -46,6 +46,13 @@ export XAI_API_KEY='your-key'
 ./xai-chat.sh
 ```
 
+Gemini can be selected in Settings when started with a Gemini key:
+
+```bash
+export GEMINI_API_KEY='your-key'
+node server.mjs
+```
+
 Do not paste API keys into browser JavaScript, chat messages, screenshots, or
 source files. Provider access is separate from a ChatGPT web subscription.
 
