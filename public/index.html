@@ -7,7 +7,16 @@
   <link rel="stylesheet" href="./styles.css">
 </head>
 <body>
+  <header id="titlebar"><span class="app-mark">⌘</span><span>Local Code Assistant</span><button id="title-open">Open Folder…</button><span class="title-caption">Your workspace, with AI</span></header>
   <div id="app">
+    <nav id="activity" aria-label="Workspace views"><button id="view-files" class="active" title="Explorer" aria-label="Explorer">▱</button><button id="view-changes" title="Changes" aria-label="Changes">⑂<span id="change-count">0</span></button><button id="view-extensions" title="Extensions" aria-label="Extensions">▦</button><button id="view-chat" title="Toggle assistant" aria-label="Toggle assistant">✧</button><button id="view-settings" title="Settings" aria-label="Settings">⚙</button></nav>
+    <aside id="explorer"><div class="pane-heading"><span id="explorer-title">EXPLORER</span><button id="open-folder" title="Open folder" aria-label="Open folder">＋</button></div><div id="folder-name">NO FOLDER OPENED</div><div id="file-tree"><div class="explorer-empty">Open a folder to start exploring your project.<button id="empty-open" class="primary">Open Folder</button><p>Choose which folder this app can access.</p></div></div><div id="changes-list" hidden></div><section id="extensions-panel" hidden aria-label="Extensions">
+      <div class="extension-search"><input id="extension-search" type="search" placeholder="Search extensions" aria-label="Search extensions"><select id="extension-filter" aria-label="Filter extensions"><option value="all">All extensions</option><option value="installed">Installed</option></select></div>
+      <p class="extension-info">Add-ons for Local Code Assistant. VS Code / VSIX packages are not supported.</p>
+      <div id="extension-list"></div><p id="extension-status" role="status" aria-live="polite"></p>
+    </section><div class="explorer-note">Changes are compared with files as opened.</div></aside>
+    <section id="editor-pane" aria-label="Code editor"><div id="editor-tabs"><div class="editor-tab-wrap selected"><button class="editor-tab">Welcome</button><button class="close-tab" aria-label="Close Welcome" title="Close Welcome">×</button></div></div><div id="editor-toolbar" hidden><span id="file-path"></span><button id="add-context">Add to chat</button><button id="toggle-diff">View changes</button><button id="fold-all" title="Collapse code blocks">Fold blocks</button><button id="save-file">Save</button></div><div id="editor-welcome"><div class="welcome-logo">⌘</div><h1>A place for your code.</h1><p>Explore files, make changes, and think with AI.</p><button id="welcome-open" class="primary">Open Folder…</button><div class="welcome-shortcuts"><span>Save file</span><kbd>⌘ / Ctrl S</kbd><span>Review edits</span><span>Changes panel</span><span>Ask about a file</span><span>Add to chat</span></div></div><div id="code-view" hidden><pre id="line-numbers" aria-hidden="true"></pre><div id="fold-gutter" aria-label="Code folding"></div><textarea id="code-editor" aria-label="File contents" spellcheck="false" wrap="off"></textarea></div><div id="folded-view" hidden aria-label="Folded code preview"></div><div id="diff-view" hidden></div><div id="workspace-message" role="status"></div></section>
+    <section id="assistant-pane"><div class="pane-heading"><span>✧ &nbsp; ASSISTANT</span><button id="chat-history" title="Chat history and settings">☰</button></div>
     <aside id="sidebar">
       <div class="sidebar-head">
         <span class="brand">Code Assistant</span>
@@ -58,25 +67,41 @@
       <div id="messages"></div>
 
       <div id="composer">
+        <div id="folder-connection" role="status">No folder connected — click Open Folder</div>
+        <label class="folder-access"><input id="ai-folder-access" type="checkbox" disabled> AI folder access <span>Read/search opened folder · edits require review</span></label>
         <div class="composer-inner">
           <div id="attachments" class="attachments"></div>
+          <div id="attachment-status" role="status" aria-live="polite"></div>
           <div class="input-wrap">
-            <textarea id="prompt" rows="1" placeholder="Ask about code, paste a stack trace, attach a file…" spellcheck="false"></textarea>
+            <textarea id="prompt" rows="1" placeholder="Ask about code, paste an image, or attach a file…" spellcheck="false"></textarea>
             <button id="attach" class="icon-btn" title="Attach file as context">📎</button>
             <button id="send" class="icon-btn" title="Send (Enter)">↑</button>
           </div>
           <div class="hint">
             <span><strong>Enter</strong> send</span>
             <span><strong>Shift+Enter</strong> newline</span>
-            <span>runs locally — nothing leaves this Mac</span>
+            <span>Context is sent to your selected provider</span>
           </div>
         </div>
       </div>
     </main>
+    </section>
   </div>
+  <footer id="statusbar"><span>⌁ &nbsp; Workspace</span><span id="workspace-status">No folder opened</span><span id="editor-position">Ready</span><span>UTF-8</span></footer>
+  <dialog id="apply-code-dialog" aria-labelledby="apply-code-title">
+    <form method="dialog"><h2 id="apply-code-title">Apply code to a file</h2><p>This replaces the entire file with the selected code block. Use a complete file, not a snippet.</p>
+      <label for="apply-code-target">File in the opened folder</label><select id="apply-code-target" required></select>
+      <p id="apply-code-status" role="status"></p><div class="dialog-actions"><button value="cancel">Cancel</button><button id="review-code" type="button" class="primary">Review changes</button></div>
+    </form>
+  </dialog>
+  <div id="notifications" aria-label="Notifications"></div>
+  <input id="folder-input" type="file" webkitdirectory multiple hidden>
 
   <input id="file" type="file" multiple hidden
-         accept=".txt,.md,.py,.js,.mjs,.ts,.tsx,.jsx,.json,.sql,.sh,.yml,.yaml,.html,.css,.xml,.go,.rs,.java,.c,.h,.cpp,.toml,.ini,.cfg,.log,.csv">
+         accept="image/png,image/jpeg,image/webp,image/gif,.txt,.md,.py,.js,.mjs,.ts,.tsx,.jsx,.json,.sql,.sh,.yml,.yaml,.html,.css,.xml,.go,.rs,.java,.c,.h,.cpp,.toml,.ini,.cfg,.log,.csv">
   <script type="module" src="./app.js"></script>
+  <script type="module" src="./workspace.js"></script>
+  <script type="module" src="./extensions.js"></script>
+  <script type="module" src="./layout.js"></script>
 </body>
 </html>

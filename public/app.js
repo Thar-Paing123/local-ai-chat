@@ -1,3 +1,4 @@
+import { runToolChat, isFolderAccessQuestion, folderAccessReply } from './tool-chat.js';
 import { renderMarkdown, escapeHtml } from './markdown.js';
 
 const DEFAULT_SYSTEM = `You are a senior software engineer acting as a coding assistant, running locally.
@@ -31,7 +32,7 @@ const store = {
     } catch { return fallback; }
   },
   set(key, value) {
-    try { localStorage.setItem(key, JSON.stringify(value)); } catch { /* ignore */ }
+    try { localStorage.setItem(key, JSON.stringify(value)); return true; } catch { return false; }
   },
 };
 
@@ -40,12 +41,17 @@ let threads = store.get(LS_THREADS, []);
 let activeId = threads[0]?.id ?? null;
 let settings = { system: DEFAULT_SYSTEM, temp: 0.3, maxTokens: 2048, provider: '', model: '', ...store.get(LS_SETTINGS, {}) };
 let controller = null;      // aborts an in-flight generation
-let attachments = [];       // [{name, text}]
+let attachments = [];       // Text files or image data URLs
+let loadingAttachments = 0;
 
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
 const activeThread = () => threads.find((t) => t.id === activeId) ?? null;
 
-function saveThreads() { store.set(LS_THREADS, threads); }
+function saveThreads() {
+  if (!store.set(LS_THREADS, threads)) {
+    el('attachment-status').textContent = 'Browser storage is full or unavailable. This chat is available now but recent messages may not survive a reload.';
+  }
+}
 function saveSettings() { store.set(LS_SETTINGS, settings); }
 
 function newThread() {
@@ -107,16 +113,44 @@ function messageNode(msg) {
 
 function paintBody(body, msg) {
   if (msg.role === 'user') {
-    body.innerHTML = '<p></p>';
-    body.firstChild.textContent = msg.content;
+    body.replaceChildren();
+    const parts = Array.isArray(msg.content) ? msg.content : [{ type: 'text', text: msg.content }];
+    for (const part of parts) {
+      if (part.type === 'text') {
+        const paragraph = document.createElement('p'); paragraph.textContent = part.text; body.append(paragraph);
+      } else if (part.type === 'image_url' && /^data:image\/(png|jpeg|webp|gif);base64,/.test(part.image_url?.url || '')) {
+        const image = document.createElement('img'); image.src = part.image_url.url;
+        image.alt = 'Attached image'; image.className = 'message-image'; body.append(image);
+      }
+    }
     return;
   }
 
   const { html, codes } = renderMarkdown(msg.content || '');
   body.innerHTML = html + (msg.streaming ? '<span class="caret"></span>' : '');
   body._codes = codes;
+  if (!msg.streaming && !msg.error) {
+    for (const copy of body.querySelectorAll('button[data-copy-code]')) {
+      const apply = document.createElement('button');
+      apply.textContent = 'Apply to file…'; apply.dataset.applyCode = copy.dataset.copyCode;
+      copy.after(apply);
+    }
+  }
 
-  if (!msg.streaming && (msg.content || msg.error)) {
+  if (msg.activity?.length) {
+    const log = document.createElement('details'); log.className = 'tool-activity';
+    const summary = document.createElement('summary'); summary.textContent = msg.streaming ? msg.activity.at(-1) : 'File tool activity';
+    const entries = document.createElement('pre'); entries.textContent = msg.activity.join('\n'); log.append(summary, entries); body.append(log);
+  }
+  for (const proposal of msg.proposals || []) {
+    const card = document.createElement('div'); card.className = 'file-proposal';
+    const title = document.createElement('strong'); title.textContent = proposal.path;
+    const description = document.createElement('p'); description.textContent = proposal.explanation;
+    const review = document.createElement('button'); review.textContent = 'Review changes';
+    review.onclick = () => window.dispatchEvent(new CustomEvent('workspace-review-proposal', { detail: proposal }));
+    card.append(title, description, review); body.append(card);
+  }
+  if (!msg.streaming && (msg.content || msg.error || msg.proposals?.length)) {
     const meta = document.createElement('div');
     meta.className = 'meta';
     if (msg.error) {
@@ -153,7 +187,7 @@ function renderMessages() {
     empty.className = 'empty';
     empty.innerHTML =
       `<h1>Local code assistant</h1>` +
-      `<p>Running fully on your machine — nothing leaves this Mac.</p>` +
+      `<p>Ask about your code. Add an open file as context to get started.</p>` +
       `<div class="chips"></div>`;
     const chips = empty.querySelector('.chips');
     for (const s of SUGGESTIONS) {
@@ -189,6 +223,12 @@ async function copyText(text, btn, revert) {
 
 // code-block copy buttons, via delegation so streaming re-renders keep working
 dom.messages.addEventListener('click', (e) => {
+  const apply = e.target.closest('button[data-apply-code]');
+  if (apply) {
+    const code = apply.closest('.body')?._codes?.[Number(apply.dataset.applyCode)];
+    if (typeof code === 'string') window.dispatchEvent(new CustomEvent('workspace-apply-code', { detail: { code } }));
+    return;
+  }
   const btn = e.target.closest('button[data-copy-code]');
   if (!btn) return;
   const body = btn.closest('.body');
@@ -203,32 +243,77 @@ function renderAttachments() {
     const chip = document.createElement('span');
     chip.className = 'attachment';
     chip.innerHTML = `<span></span><button title="Remove">&times;</button>`;
-    chip.querySelector('span').textContent = `${a.name} (${a.text.split('\n').length}L)`;
+    chip.querySelector('span').textContent = a.dataUrl ? a.name : `${a.name} (${a.text.split('\n').length}L)`;
+    chip.querySelector('button').setAttribute('aria-label', `Remove ${a.name}`);
+    if (a.dataUrl) {
+      chip.classList.add('image-attachment');
+      const preview = document.createElement('img'); preview.src = a.dataUrl; preview.alt = a.name;
+      chip.prepend(preview);
+    }
     chip.querySelector('button').onclick = () => { attachments.splice(i, 1); renderAttachments(); };
     return chip;
   }));
 }
 
 dom.attachBtn.onclick = () => dom.fileInput.click();
-dom.fileInput.onchange = async () => {
-  for (const file of dom.fileInput.files) {
-    if (file.size > 400_000) {
-      alert(`${file.name} is larger than 400 KB — paste the relevant part instead.`);
-      continue;
+const attachmentStatus = el('attachment-status');
+const imageTypes = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/gif']);
+async function addFiles(files) {
+  loadingAttachments++;
+  attachmentStatus.textContent = 'Loading attachments…';
+  const errors = [];
+  try {
+    for (const file of files) {
+      try {
+        if (file.type.startsWith('image/')) {
+          if (!imageTypes.has(file.type)) throw new Error('Use PNG, JPEG, WebP, or GIF.');
+          if (file.size > 2 * 1024 * 1024) throw new Error('Image is larger than 2 MB.');
+          const dataUrl = await new Promise((resolve, reject) => {
+            const reader = new FileReader(); reader.onload = () => resolve(reader.result);
+            reader.onerror = () => reject(new Error('Could not read image.')); reader.readAsDataURL(file);
+          });
+          if (attachments.filter(a => a.dataUrl).length >= 4) throw new Error('Attach up to four images per message.');
+          attachments.push({ name: file.name || 'Pasted image', dataUrl });
+        } else {
+          if (file.size > 400_000) throw new Error('Text file is larger than 400 KB.');
+          attachments.push({ name: file.name, text: await file.text() });
+        }
+      } catch (error) { errors.push(`${file.name || 'Image'}: ${error.message}`); }
     }
-    attachments.push({ name: file.name, text: await file.text() });
+  } finally {
+    loadingAttachments--;
+    renderAttachments();
+    attachmentStatus.textContent = errors.join(' ') || 'Attachments ready. Images require a model that supports vision.';
   }
-  dom.fileInput.value = '';
-  renderAttachments();
+}
+dom.fileInput.onchange = async () => {
+  const files = [...dom.fileInput.files]; dom.fileInput.value = '';
+  if (files.length) await addFiles(files);
 };
+dom.prompt.addEventListener('paste', (event) => {
+  const images = [...(event.clipboardData?.items || [])]
+    .filter(item => item.kind === 'file' && item.type.startsWith('image/'))
+    .map(item => item.getAsFile()).filter(Boolean);
+  if (!images.length) return; // Keep normal text paste behavior.
+  event.preventDefault();
+  const text = event.clipboardData.getData('text/plain');
+  if (text) { dom.prompt.setRangeText(text, dom.prompt.selectionStart, dom.prompt.selectionEnd, 'end'); autosize(); }
+  addFiles(images);
+});
 
 function buildUserContent(text) {
   if (!attachments.length) return text;
-  const files = attachments.map((a) => {
+  const files = attachments.filter(a => !a.dataUrl).map((a) => {
     const ext = a.name.split('.').pop().toLowerCase();
     return `File: ${a.name}\n\`\`\`${ext}\n${a.text}\n\`\`\``;
   }).join('\n\n');
-  return `${files}\n\n${text}`;
+  const content = [files, text].filter(Boolean).join('\n\n');
+  const images = attachments.filter(a => a.dataUrl);
+  if (!images.length) return content;
+  return [
+    ...(content ? [{ type: 'text', text: content }] : []),
+    ...images.map(a => ({ type: 'image_url', image_url: { url: a.dataUrl } })),
+  ];
 }
 
 // ---------- generation ----------
@@ -243,17 +328,25 @@ async function send() {
   if (controller) { controller.abort(); return; }   // button doubles as Stop
 
   const text = dom.prompt.value.trim();
-  if (!text) return;
+  if (loadingAttachments) { attachmentStatus.textContent = 'Wait for the images to finish loading.'; return; }
+  if (!text && !attachments.length) return;
 
   const t = activeThread() ?? newThread();
-  t.messages.push({ role: 'user', content: buildUserContent(text) });
+  const content = buildUserContent(text);
+  const estimatedBody = JSON.stringify({ messages: [...t.messages, { role: 'user', content }], system: settings.system });
+  if (new Blob([estimatedBody]).size > 7.5 * 1024 * 1024) {
+    attachmentStatus.textContent = 'This conversation is too large to send. Remove an image, use smaller images, or start a new chat.';
+    return;
+  }
+  t.messages.push({ role: 'user', content });
   if (t.title === 'New chat') {
-    t.title = text.slice(0, 44) + (text.length > 44 ? '…' : '');
+    t.title = text ? text.slice(0, 44) + (text.length > 44 ? '…' : '') : 'Image / file discussion';
     renderThreads();
   }
 
   dom.prompt.value = '';
   attachments = [];
+  attachmentStatus.textContent = '';
   renderAttachments();
   autosize();
   renderMessages();
@@ -294,59 +387,27 @@ async function stream(thread) {
   let tokens = 0;
 
   try {
-    const res = await fetch('/api/chat', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      signal: controller.signal,
-      body: JSON.stringify({
-        provider: settings.provider,
-        model: settings.model || config.model,
-        temperature: Number(settings.temp),
-        max_tokens: Number(settings.maxTokens),
+    const session = window.localFileTools?.();
+    const lastUser = thread.messages.filter(message => message.role === 'user').at(-1);
+    if (isFolderAccessQuestion(lastUser?.content)) {
+      assistant.content = await folderAccessReply(session, controller.signal);
+      assistant.stats = 'Verified by the app';
+    } else await runToolChat({
+      payload: {
+        provider: settings.provider, model: settings.model || config.model,
+        temperature: Number(settings.temp), max_tokens: Number(settings.maxTokens),
         messages: [
           { role: 'system', content: settings.system },
-          ...thread.messages
-            .filter((m) => m !== assistant && !m.error)
-            .map(({ role, content }) => ({ role, content })),
+          ...thread.messages.filter(m => m !== assistant && !m.error).map(({ role, content }) => ({ role, content })),
         ],
-      }),
+      },
+      session, signal: controller.signal,
+      onText(text) { assistant.content += text; tokens++; dirty = true; },
+      onActivity(text) {
+        assistant.activity ||= []; assistant.activity.push(text); dirty = true;
+      },
+      onProposal(proposal) { assistant.proposals ||= []; assistant.proposals.push(proposal); dirty = true; },
     });
-
-    if (!res.ok || res.headers.get('content-type')?.includes('application/json')) {
-      const detail = await res.json().catch(() => ({}));
-      throw new Error(detail.error ?? `request failed (${res.status})`);
-    }
-
-    const reader = res.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = '';
-
-    for (;;) {
-      const { value, done } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-
-      const events = buffer.split('\n');
-      buffer = events.pop() ?? '';   // keep the partial line
-
-      for (const line of events) {
-        const trimmed = line.trim();
-        if (!trimmed.startsWith('data:')) continue;
-        const data = trimmed.slice(5).trim();
-        if (data === '[DONE]') continue;
-
-        let parsed;
-        try { parsed = JSON.parse(data); } catch { continue; }
-        if (parsed.error) throw new Error(parsed.error.message ?? String(parsed.error));
-
-        const delta = parsed.choices?.[0]?.delta?.content;
-        if (delta) {
-          assistant.content += delta;
-          tokens++;
-          dirty = true;
-        }
-      }
-    }
   } catch (err) {
     if (err.name === 'AbortError') {
       assistant.content += assistant.content ? '\n\n_(stopped)_' : '_(stopped)_';
@@ -460,3 +521,9 @@ setBusy(false);
 autosize();
 loadConfig();
 dom.prompt.focus();
+
+window.addEventListener('workspace-context', (event) => {
+  attachments.push(event.detail);
+  renderAttachments();
+  dom.prompt.focus();
+});

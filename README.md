@@ -203,3 +203,58 @@ logs/               app.log, vllm.log
   generation crawl until one was killed.
 - Rendered model output is escaped before any markup is applied, so a reply
   containing HTML can't inject into the page.
+
+## Editor workspace
+
+The UI includes a VS Code–style explorer, editor tabs, a Changes panel, and an AI chat sidebar.
+
+- Click **Open Folder** to choose a project and grant folder access. File contents stay in the browser until you explicitly add a file to chat.
+- Click a file to edit it. Use **Save** or **⌘/Ctrl+S** to write changes in browsers that expose the native directory picker. Other browsers use folder upload and **Download** for edited files.
+- **View changes** compares current text with the original version loaded when the file was opened. This is a session comparison, not Git status or a Git diff. Reopen the folder to reset it.
+- **Add to chat** attaches the current file contents to your next message, which goes to your selected model provider.
+- Use the assistant's menu for chat history and settings, or the activity bar to toggle the assistant.
+
+Files larger than 400 KB and binary files cannot be edited. Dependency folders and `.git` are omitted. Unsaved edits trigger a warning before leaving; saving checks whether the file has changed externally before writing.
+
+### Extensions
+
+Click **Extensions** (the grid icon in the activity bar) to search available app add-ons, install them, or manage installed add-ons. Installation takes effect immediately and is remembered in this browser. Uninstall removes the add-on's behavior.
+
+Included add-ons: **JSON Formatter** (adds a Format JSON editor action), **Larger Editor Text**, and **Editor Reading Lines**. These are bundled add-ons for this app; VS Code Marketplace extensions and `.vsix` packages cannot run here.
+
+### Panel sizing, folding, and installation feedback
+
+- Hover over the explorer/editor or editor/assistant border to reveal a **resize handle**. Drag left/right to resize. Double-click to reset, or focus the handle and use arrow keys. Widths are remembered in this browser.
+- Use gutter arrows to fold individual code blocks, or **Fold blocks** to collapse all detected blocks. **Unfold to edit** returns to the editor. Folding is a read-only preview that preserves the full source for saving and chat. Block detection supports brace/bracket blocks and Python indentation; it is heuristic rather than a full language parser.
+- Extension cards show **Installing…**, **Installed · Enabled**, and uninstall progress. Dismissible notifications report success, activation failures with retry, and preferences that could not be saved.
+
+### Images and closing tabs
+
+Paste an image into the chat input with **⌘/Ctrl+V**, or select an image with the attachment button. Previews can be removed before sending. PNG, JPEG, WebP, and GIF are supported, up to 2 MB each and four images per message. Choose a model with vision support to interpret them. Images are sent to the selected provider with the conversation; browser storage limits may prevent large chats from persisting, in which case the app shows a message.
+
+Use **×** on the Welcome tab or a file tab to close it. Closing an unsaved file asks whether to discard its edits. Closing Welcome leaves the center empty when there are no files open; Open Folder remains available in the title bar.
+
+### Apply AI code to your folder
+
+Completed AI code blocks have an **Apply to file…** button. Choose an existing file in the folder you opened, then click **Review changes** to load the proposed replacement into the editor's diff view. **Save** writes it to disk using the folder access you granted; browsers with read-only folder upload use Download instead. Nothing is written during review. Applying a code block replaces the whole file, so ask the assistant for the complete updated file. Unsaved edits require confirmation before replacement, and saving still checks for external changes.
+
+The resize handles can use the available window width (there is no 600px maximum). The middle editor can shrink to 48px. Closing Welcome and all file tabs removes the middle section completely so chat fills the remaining space. Opening a file restores the editor; the explorer/chat border remains draggable while the editor is closed.
+
+### AI file-access tools
+
+Open a project folder and leave **AI folder access** checked above the chat input. Ask a question such as “Find where the server starts” or “Read public/styles.css and propose a change to the background.” The selected model can now call:
+
+- `list_files`: paginated file paths within the opened folder.
+- `read_file`: bounded line ranges from text files, including unsaved editor content.
+- `search_files`: literal text searches with bounded results and pagination.
+- `propose_file_edit`: a complete replacement of an existing file, shown as a **Review changes** card. Review loads the diff; **Save** writes to the folder.
+
+A model with tool-calling support is required. The app sends tool definitions through the existing OpenAI-compatible provider connection and feeds tool results back to the model. See [Ollama tool calling](https://docs.ollama.com/capabilities/tool-calling). If a model rejects tools, select one that supports them or turn off AI folder access to use ordinary chat.
+
+Folder reads are sent to your selected model provider. Turn off **AI folder access** to revoke access for subsequent tool calls. Access is scoped to the folder selected in the browser; typing a path cannot grant access to another folder. Folder changes invalidate active tool sessions and old proposals. Proposals never automatically write, create, delete, or execute files. File text is limited to 400 KB, read results to 40,000 characters, searches to 100 files / 50 matches per call, and each reply to eight tool rounds. Permission/read failures are reported as tool results. Refreshing requires selecting the folder again.
+
+Run the dependency-free tool tests with:
+
+```bash
+node --test tests/file-tools.test.mjs
+```
