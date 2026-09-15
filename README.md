@@ -14,7 +14,7 @@ ollama list              # see all installed models
 node server.mjs          # → http://localhost:8000
 ```
 
-That's the whole thing: no `npm install`, no build step, no dependencies.
+Requires Node.js 22.13 or newer for built-in SQLite. No `npm install` or build step is needed.
 
 ## Optional cloud providers
 
@@ -141,7 +141,7 @@ Compatibility symlinks remain at the standard `~/.ollama/models` and
 - **Streaming** replies, token by token, with a `tok/s` readout per message
 - **Markdown + syntax highlighting** for python, js/ts, sql, go, rust, bash, java, c — with per-block copy buttons
 - **Attach files** (📎) to send code as context — they're inlined as fenced blocks
-- **Conversations** saved in `localStorage`; rename-by-first-message, delete per thread
+- **Conversations** saved in server-side SQLite; rename-by-first-message, delete per thread
 - **Editable system prompt**, temperature, and max tokens in the sidebar
 - **Stop** mid-generation (the send button becomes ■) — this aborts upstream too, so the GPU stops working on it
 - **Regenerate** the last reply
@@ -230,7 +230,7 @@ Included add-ons: **JSON Formatter** (adds a Format JSON editor action), **Large
 
 ### Images and closing tabs
 
-Paste an image into the chat input with **⌘/Ctrl+V**, or select an image with the attachment button. Previews can be removed before sending. PNG, JPEG, WebP, and GIF are supported, up to 2 MB each and four images per message. Choose a model with vision support to interpret them. Images are sent to the selected provider with the conversation; browser storage limits may prevent large chats from persisting, in which case the app shows a message.
+Paste an image into the chat input with **⌘/Ctrl+V**, or select an image with the attachment button. Previews can be removed before sending. PNG, JPEG, WebP, and GIF are supported, up to 2 MB each and four images per message. Choose a model with vision support to interpret them. Images are sent to the selected provider with the conversation; sent images are stored as attachment files on the server, with references in SQLite. Unsaved drafts stay in browser memory.
 
 Use **×** on the Welcome tab or a file tab to close it. Closing an unsaved file asks whether to discard its edits. Closing Welcome leaves the center empty when there are no files open; Open Folder remains available in the title bar.
 
@@ -249,7 +249,7 @@ Open a project folder and leave **AI folder access** checked above the chat inpu
 - `search_files`: literal text searches with bounded results and pagination.
 - `propose_file_edit`: a complete replacement of an existing file, shown as a **Review changes** card. Review loads the diff; **Save** writes to the folder.
 
-A model with tool-calling support is required. The app sends tool definitions through the existing OpenAI-compatible provider connection and feeds tool results back to the model. See [Ollama tool calling](https://docs.ollama.com/capabilities/tool-calling). If a model rejects tools, select one that supports them or turn off AI folder access to use ordinary chat.
+The app automatically chooses native tool calling or a JSON compatibility mode. Ollama capability metadata identifies models without native tools; rejected tool requests and supported tool requests returned as plain JSON also trigger compatibility mode. Both modes use the same scoped file tools and review-only edit proposals. Models still need to follow instructions: malformed or ordinary text responses never execute file actions. The installed `qwen2.5-coder:7b` was verified live reading a test file and proposing an edit through this fallback. See [Ollama tool calling](https://docs.ollama.com/capabilities/tool-calling) for the native protocol.
 
 Folder reads are sent to your selected model provider. Turn off **AI folder access** to revoke access for subsequent tool calls. Access is scoped to the folder selected in the browser; typing a path cannot grant access to another folder. Folder changes invalidate active tool sessions and old proposals. Proposals never automatically write, create, delete, or execute files. File text is limited to 400 KB, read results to 40,000 characters, searches to 100 files / 50 matches per call, and each reply to eight tool rounds. Permission/read failures are reported as tool results. Refreshing requires selecting the folder again.
 
@@ -258,3 +258,34 @@ Run the dependency-free tool tests with:
 ```bash
 node --test tests/file-tools.test.mjs
 ```
+
+
+## Chat database and attachment storage
+
+Chats now live on the Node.js server:
+
+| Data | Default location |
+|---|---|
+| Chat messages, titles, tool activity, edit proposals, attachment metadata | `data/chats.sqlite` |
+| Sent images and text attachment files | `data/attachments/` |
+| Provider settings, extensions, panel widths | Browser localStorage |
+| Project source files | Their original folders |
+
+`data/` is excluded from Git. Set `CHAT_DATA_DIR=/absolute/path` before starting the server to use a different storage directory. The server uses [Node's built-in SQLite module](https://nodejs.org/api/sqlite.html); Node 22 may print an experimental-feature notice.
+
+### Migrating existing chats
+
+Reload the app in the **same browser and origin** where you used it before (for example, `http://localhost:8000`). The app imports `lac.threads` into SQLite before loading chats. The old browser value stays untouched as a migration backup. Imports are transactional and repeat-safe; conflicting server chats are preserved, and previously imported/deleted chats are not recreated. Embedded historical images become attachment files. Historical text attachments already embedded in message text remain preserved there; new text attachments also get separate files.
+
+The migration runs in the browser because the server cannot read browser localStorage. If you used another port, hostname, or browser, that storage must be migrated from its original origin. Check **Chats saved on this computer** above the composer to confirm storage is connected.
+
+### Saving and recovery
+
+- User messages save before generation starts. Responses checkpoint every three seconds and save again on completion or Stop. A recovered checkpoint is labelled as interrupted.
+- Image bytes are stored once and referenced by ID; the server reconstructs image payloads when sending to your model.
+- Concurrent tabs use version checks. A conflicting tab cannot silently overwrite or delete a newer chat. Save errors show **Retry** and **Export JSON**; export unsaved text before reloading after a conflict. Exported JSON may reference attachment files, so it is not a complete standalone image backup.
+- Deleting a chat removes its database record and attachment files that no other chat references.
+- To back up everything, stop the server and copy the **entire data directory** (including SQLite sidecar files, if present, and `attachments/`). Restore the directory before starting the server.
+- Draft input, pending attachments, and folder permissions still stay in browser memory. Database storage does not grant filesystem access to project folders.
+
+Run automated tests with `node --test tests/*.test.mjs`.

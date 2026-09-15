@@ -1,3 +1,4 @@
+import { createChatRepository } from './chat-repository.js';
 import { runToolChat, isFolderAccessQuestion, folderAccessReply } from './tool-chat.js';
 import { renderMarkdown, escapeHtml } from './markdown.js';
 
@@ -37,7 +38,8 @@ const store = {
 };
 
 let config = { providers: [], defaultProvider: 'ollama' };
-let threads = store.get(LS_THREADS, []);
+let threads = [];
+let storageReady = false, preparing = false;
 let activeId = threads[0]?.id ?? null;
 let settings = { system: DEFAULT_SYSTEM, temp: 0.3, maxTokens: 2048, provider: '', model: '', ...store.get(LS_SETTINGS, {}) };
 let controller = null;      // aborts an in-flight generation
@@ -47,18 +49,20 @@ let loadingAttachments = 0;
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
 const activeThread = () => threads.find((t) => t.id === activeId) ?? null;
 
-function saveThreads() {
-  if (!store.set(LS_THREADS, threads)) {
-    el('attachment-status').textContent = 'Browser storage is full or unavailable. This chat is available now but recent messages may not survive a reload.';
-  }
-}
+const repository = createChatRepository({ onStatus(message, error) {
+  el('chat-storage-status').textContent = message;
+  el('chat-storage-status').classList.toggle('error', error);
+  el('retry-chat-storage').hidden = !error;
+  el('export-chat-backup').hidden = !error;
+} });
+function saveThread(thread) { return repository.save(thread); }
 function saveSettings() { store.set(LS_SETTINGS, settings); }
 
 function newThread() {
   const t = { id: uid(), title: 'New chat', messages: [], createdAt: Date.now() };
   threads.unshift(t);
   activeId = t.id;
-  saveThreads();
+  saveThread(t).catch(() => {});
   renderThreads();
   renderMessages();
   dom.prompt.focus();
@@ -74,11 +78,12 @@ function renderThreads() {
     row.innerHTML = `<span class="title"></span><button class="del" title="Delete">&times;</button>`;
     row.querySelector('.title').textContent = t.title;
     row.onclick = () => { activeId = t.id; renderThreads(); renderMessages(); };
-    row.querySelector('.del').onclick = (e) => {
+    row.querySelector('.del').onclick = async (e) => {
       e.stopPropagation();
+      if (controller || preparing) { el('chat-storage-status').textContent = 'Stop generation before deleting a chat.'; return; }
+      try { await repository.remove(t); } catch { return; }
       threads = threads.filter((x) => x.id !== t.id);
       if (activeId === t.id) activeId = threads[0]?.id ?? null;
-      saveThreads();
       renderThreads();
       if (!activeId) newThread(); else renderMessages();
     };
@@ -118,10 +123,15 @@ function paintBody(body, msg) {
     for (const part of parts) {
       if (part.type === 'text') {
         const paragraph = document.createElement('p'); paragraph.textContent = part.text; body.append(paragraph);
-      } else if (part.type === 'image_url' && /^data:image\/(png|jpeg|webp|gif);base64,/.test(part.image_url?.url || '')) {
+      } else if (part.type === 'image_url' && (/^(?:data:image\/(?:png|jpeg|webp|gif);base64,|\/api\/attachments\/[a-f0-9]{64}$)/.test(part.image_url?.url || ''))) {
         const image = document.createElement('img'); image.src = part.image_url.url;
         image.alt = 'Attached image'; image.className = 'message-image'; body.append(image);
       }
+    }
+    for (const attachment of msg.attachments || []) {
+      if (!/^\/api\/attachments\/[a-f0-9]{64}$/.test(attachment.url || '')) continue;
+      const link = document.createElement('a'); link.href = attachment.url; link.textContent = attachment.name;
+      link.className = 'saved-attachment'; link.download = attachment.name; body.append(link);
     }
     return;
   }
@@ -150,6 +160,7 @@ function paintBody(body, msg) {
     review.onclick = () => window.dispatchEvent(new CustomEvent('workspace-review-proposal', { detail: proposal }));
     card.append(title, description, review); body.append(card);
   }
+  if (msg.interrupted) { const note = document.createElement('p'); note.className = 'error'; note.textContent = 'Generation was interrupted. This is the last saved response.'; body.append(note); }
   if (!msg.streaming && (msg.content || msg.error || msg.proposals?.length)) {
     const meta = document.createElement('div');
     meta.className = 'meta';
@@ -325,6 +336,7 @@ function setBusy(busy) {
 }
 
 async function send() {
+  if (!storageReady || preparing) return;
   if (controller) { controller.abort(); return; }   // button doubles as Stop
 
   const text = dom.prompt.value.trim();
@@ -338,7 +350,7 @@ async function send() {
     attachmentStatus.textContent = 'This conversation is too large to send. Remove an image, use smaller images, or start a new chat.';
     return;
   }
-  t.messages.push({ role: 'user', content });
+  t.messages.push({ role: 'user', content, attachments: attachments.map(a => ({...a})) });
   if (t.title === 'New chat') {
     t.title = text ? text.slice(0, 44) + (text.length > 44 ? '…' : '') : 'Image / file discussion';
     renderThreads();
@@ -350,7 +362,9 @@ async function send() {
   renderAttachments();
   autosize();
   renderMessages();
-  await stream(t);
+  preparing = true;
+  try { await saveThread(t); preparing = false; renderMessages(); await stream(t); } catch { /* Keep unsaved chat in memory for Retry. */ }
+  finally { preparing = false; }
 }
 
 async function regenerate() {
@@ -383,6 +397,12 @@ async function stream(thread) {
     scrollToBottom();
   }, 60);
 
+  let checkpointSaving = false;
+  const checkpoint = setInterval(() => {
+    if (checkpointSaving) return;
+    checkpointSaving = true;
+    saveThread(thread).catch(() => {}).finally(() => { checkpointSaving = false; });
+  }, 3000);
   const started = performance.now();
   let tokens = 0;
 
@@ -393,6 +413,7 @@ async function stream(thread) {
       assistant.content = await folderAccessReply(session, controller.signal);
       assistant.stats = 'Verified by the app';
     } else await runToolChat({
+      mode: config.providers.find(p => p.id === settings.provider)?.modelCapabilities?.[settings.model]?.tools === false ? 'compatibility' : 'native',
       payload: {
         provider: settings.provider, model: settings.model || config.model,
         temperature: Number(settings.temp), max_tokens: Number(settings.maxTokens),
@@ -416,6 +437,7 @@ async function stream(thread) {
     }
   } finally {
     clearInterval(timer);
+    clearInterval(checkpoint);
     controller = null;
     setBusy(false);
 
@@ -424,7 +446,7 @@ async function stream(thread) {
     assistant.streaming = false;
 
     paintBody(body, assistant);
-    saveThreads();
+    await saveThread(thread).catch(() => {});
     scrollToBottom();
   }
 }
@@ -516,11 +538,33 @@ async function loadConfig() {
 // ---------- boot ----------
 
 bindSettings();
-if (!threads.length) newThread(); else { renderThreads(); renderMessages(); }
 setBusy(false);
 autosize();
 loadConfig();
-dom.prompt.focus();
+async function loadChats() {
+  dom.send.disabled = true; dom.newChat.disabled = true;
+  try {
+    threads = await repository.load(); storageReady = true;
+    activeId = threads[0]?.id ?? null;
+    if (!threads.length) newThread(); else { renderThreads(); renderMessages(); }
+    dom.send.disabled = false; dom.newChat.disabled = false;
+  } catch (error) {
+    el('chat-storage-status').textContent = `Could not load chats: ${error.message}`;
+    el('retry-chat-storage').hidden = false;
+    el('export-chat-backup').hidden = false;
+  }
+}
+el('export-chat-backup').onclick = () => {
+  const content = threads.length ? JSON.stringify(threads, null, 2) : localStorage.getItem(LS_THREADS) || '[]';
+  const url = URL.createObjectURL(new Blob([content], { type: 'application/json' }));
+  const link = document.createElement('a'); link.href = url; link.download = 'chat-backup.json'; link.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
+};
+el('retry-chat-storage').onclick = async () => {
+  if (!storageReady) return loadChats();
+  try { await repository.retry(); } catch { /* Repository shows the failure. */ }
+};
+window.addEventListener('beforeunload', event => { if (repository.unsaved || controller) { event.preventDefault(); event.returnValue = ''; } });
+loadChats();
 
 window.addEventListener('workspace-context', (event) => {
   attachments.push(event.detail);

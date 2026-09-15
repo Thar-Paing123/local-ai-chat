@@ -13,10 +13,13 @@
 //
 // Usage: node server.mjs   →   http://localhost:5173
 
+import { createChatStorage } from './chat-storage.mjs';
 import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { extname, join, normalize } from 'node:path';
 import { fileURLToPath } from 'node:url';
+
+const chatStorage = createChatStorage(process.env.CHAT_DATA_DIR || fileURLToPath(new URL('./data/', import.meta.url)));
 
 const PORT = Number(process.env.PORT ?? 8000);
 const legacyBaseUrl = (process.env.LLM_BASE_URL ?? 'http://127.0.0.1:11434/v1').replace(/\/$/, '');
@@ -93,6 +96,11 @@ async function proxyChat(req, res) {
     return json(res, 400, { error: `bad request: ${err.message}` });
   }
 
+  try {
+    if (!Array.isArray(payload.messages)) throw new Error('messages must be an array');
+    payload.messages = chatStorage.hydrate(payload.messages);
+    if (Buffer.byteLength(JSON.stringify(payload)) > 8 * 1024 * 1024) throw new Error('Conversation images exceed the request limit. Start a new chat or use smaller images.');
+  } catch (error) { return json(res, error.status || 400, { error: error.message }); }
   const provider = payload.provider ?? 'ollama';
   const backend = backends[provider] ?? backends.ollama;
   delete payload.provider;
@@ -136,6 +144,37 @@ async function proxyChat(req, res) {
 
 const server = createServer(async (req, res) => {
   const { pathname } = new URL(req.url, 'http://localhost');
+  if (pathname.startsWith('/api/')) {
+    const host = req.headers.host || '';
+    if (!/^(localhost|127\.0\.0\.1)(:\d+)?$/.test(host) || (req.headers.origin && req.headers.origin !== `http://${host}`) || req.headers['sec-fetch-site'] === 'cross-site') return json(res, 403, { error: 'Local same-origin requests only.' });
+  }
+  if (pathname === '/api/threads' || pathname.startsWith('/api/threads/') || pathname.startsWith('/api/attachments/')) {
+    try {
+      if (['POST', 'PUT', 'DELETE'].includes(req.method) && !req.headers['content-type']?.startsWith('application/json')) return json(res, 415, { error: 'Use application/json.' });
+      if (pathname === '/api/threads' && req.method === 'GET') return json(res, 200, { threads: chatStorage.list() });
+      if (pathname === '/api/threads/import' && req.method === 'POST') {
+        const input = JSON.parse(await readBody(req, 64 * 1024 * 1024));
+        return json(res, 200, { ids: chatStorage.import(input.threads) });
+      }
+      const thread = /^\/api\/threads\/([\w-]{1,100})$/.exec(pathname);
+      if (thread && req.method === 'PUT') {
+        const input = JSON.parse(await readBody(req, 64 * 1024 * 1024));
+        if (input.thread?.id !== thread[1]) return json(res, 400, { error: 'Thread ID mismatch.' });
+        return json(res, 200, { thread: chatStorage.save(input.thread, input.version) });
+      }
+      if (thread && req.method === 'DELETE') {
+        const input = JSON.parse(await readBody(req)); chatStorage.delete(thread[1], input.version);
+        return json(res, 200, { deleted: true });
+      }
+      const attachment = /^\/api\/attachments\/([a-f0-9]{64})$/.exec(pathname);
+      if (attachment && (req.method === 'GET' || req.method === 'HEAD')) {
+        const item = chatStorage.getAttachment(attachment[1]);
+        res.writeHead(200, { 'content-type': item.mime, 'content-length': item.size, 'cache-control': 'private, no-cache', 'x-content-type-options': 'nosniff', 'cross-origin-resource-policy': 'same-origin', 'content-disposition': item.mime.startsWith('image/') ? 'inline' : 'attachment' });
+        return res.end(req.method === 'HEAD' ? undefined : item.bytes);
+      }
+      return json(res, 404, { error: 'Not found.' });
+    } catch (error) { return json(res, error.status || (error instanceof SyntaxError ? 400 : 500), { error: error.message }); }
+  }
 
   if (pathname === '/api/chat' && req.method === 'POST') return proxyChat(req, res);
 
@@ -143,9 +182,10 @@ const server = createServer(async (req, res) => {
     const providers = await Promise.all(Object.entries(backends).map(async ([id, backend]) => {
       let models = [];
       let online = false;
+      let modelCapabilities = {};
       if (backend.apiKey) {
         try {
-          const r = await upstream('/models', { method: 'GET' }, id);
+          const r = await upstream('/models', { method: 'GET', signal: AbortSignal.timeout(5000) }, id);
           if (r.ok) {
             models = (await r.json()).data?.map((model) => model.id)
               .filter((model) => !/(?:embed|embedding)/i.test(model)) ?? [];
@@ -155,8 +195,18 @@ const server = createServer(async (req, res) => {
           // backend unavailable
         }
       }
+      if (id === 'ollama' && online) {
+        try {
+          const response = await fetch(`${backend.baseUrl.replace(/\/v1$/, '')}/api/tags`, { signal: AbortSignal.timeout(5000), headers: { authorization: `Bearer ${backend.apiKey}` } });
+          if (response.ok) {
+            for (const model of (await response.json()).models || []) {
+              if (Array.isArray(model.capabilities)) modelCapabilities[model.name] = { tools: model.capabilities.includes('tools') };
+            }
+          }
+        } catch { /* Unknown capabilities: try native tools, then compatibility mode. */ }
+      }
       if (!models.length && backend.apiKey) models = [backend.model];
-      return { id, label: backend.label, baseUrl: backend.baseUrl, model: backend.model, models, online };
+      return { id, label: backend.label, baseUrl: backend.baseUrl, model: backend.model, models, online, modelCapabilities };
     }));
     return json(res, 200, { providers, defaultProvider: process.env.LLM_PROVIDER ?? 'ollama' });
   }
@@ -166,6 +216,8 @@ const server = createServer(async (req, res) => {
 });
 
 server.listen(PORT, '127.0.0.1', () => {
-  console.log(`local-ai-chat  →  http://localhost:${PORT}`);
+  console.log(`local-ai-chat  →  http://localhost:${server.address().port}`);
   console.log(`backends       →  ${Object.values(backends).map(({ label, baseUrl }) => `${label}: ${baseUrl}`).join(' | ')}`);
 });
+
+process.on('SIGTERM', () => server.close(() => { chatStorage.close(); process.exit(0); }));

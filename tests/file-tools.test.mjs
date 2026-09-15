@@ -100,3 +100,36 @@ test('runtime access and real filenames are included in one system message', asy
     return response([{delta:{content:'Project files are available.'},finish_reason:'stop'}]);
   }});
 });
+test('compatibility mode reads files without sending native tool parameters', async () => {
+  const { session } = fixture(); let turn = 0, output = '';
+  await runToolChat({payload:{messages:[{role:'user',content:'Read main file'}]},session,mode:'compatibility',signal:signal(),onText:t=>output+=t,onActivity(){},onProposal(){},fetcher:async(_,init)=>{
+    const body = JSON.parse(init.body); assert.equal(body.tools,undefined);
+    if (turn++ === 0) return response([{delta:{content:JSON.stringify({tool:'read_file',arguments:{path:'src/main.js'}})},finish_reason:'stop'}]);
+    assert.match(body.messages.at(-1).content,/const value = 1/);
+    return response([{delta:{content:JSON.stringify({answer:'The value is 1.'})},finish_reason:'stop'}]);
+  }});
+  assert.equal(turn,2); assert.equal(output,'The value is 1.');
+});
+test('unsupported native tools automatically fall back', async () => {
+  const { session } = fixture(); let turn = 0;
+  await runToolChat({payload:{messages:[]},session,signal:signal(),onText(){},onActivity(){},onProposal(){},fetcher:async(_,init)=>{
+    const body = JSON.parse(init.body);
+    if (turn++ === 0) { assert.ok(body.tools); return new Response(JSON.stringify({error:'model does not support tools'}),{status:400,headers:{'content-type':'application/json'}}); }
+    assert.equal(body.tools,undefined);
+    return response([{delta:{content:'{"answer":"Ready."}'},finish_reason:'stop'}]);
+  }}); assert.equal(turn,2);
+});
+test('incorrect access denial retries without displaying the denial', async () => {
+  const { session } = fixture(); let turn = 0, output = '';
+  await runToolChat({payload:{messages:[]},session,signal:signal(),onText:t=>output+=t,onActivity(){},onProposal(){},fetcher:async()=>response([{delta:{content:turn++ === 0 ? 'I cannot directly access your files.' : '{"answer":"Folder tools are connected."}'},finish_reason:'stop'}])});
+  assert.equal(turn,2); assert.equal(output,'Folder tools are connected.');
+});
+test('plain JSON tool requests from a native model activate compatibility mode', async () => {
+  const {session} = fixture(); let turn=0, output='';
+  await runToolChat({payload:{messages:[]},session,signal:signal(),onText:t=>output+=t,onActivity(){},onProposal(){},fetcher:async(_,init)=>{
+    const body=JSON.parse(init.body);
+    if (turn++ === 0) return response([{delta:{content:'{"name":"read_file","arguments":{"path":"src/main.js"}}'},finish_reason:'stop'}]);
+    assert.equal(body.tools,undefined); assert.match(body.messages.at(-1).content,/const value = 1/);
+    return response([{delta:{content:'{"answer":"Read successfully."}'},finish_reason:'stop'}]);
+  }}); assert.equal(output,'Read successfully.'); assert.equal(turn,2);
+});

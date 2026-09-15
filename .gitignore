@@ -12,3 +12,6 @@ logs/
 node_modules/
 npm-debug.log*
 .vscode/
+
+# Local chat database and attachments
+data/

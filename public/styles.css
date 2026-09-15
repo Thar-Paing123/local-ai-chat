@@ -417,3 +417,6 @@ kbd { font: inherit; }
 .file-proposal { margin: 10px 0; padding: 12px; border: 1px solid #40566b; border-radius: 5px; overflow-wrap: anywhere; }
 .file-proposal button { border: 0; background: var(--accent); color: white; padding: 5px 10px; border-radius: 3px; }
 #folder-connection { font-size: 11px; color: #9bbad0; padding-bottom: 6px; overflow-wrap: anywhere; }
+.chat-storage { display: flex; align-items: center; gap: 8px; margin-bottom: 7px; font-size: 10px; color: #888; }
+.chat-storage button { background: none; color: #91c9f7; border: 1px solid #555; border-radius: 3px; font-size: 11px; }
+.saved-attachment { display: block; margin-top: 5px; font-size: 11px; overflow-wrap: anywhere; }
