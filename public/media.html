@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Create images & videos · Local AI</title>
+  <link rel="stylesheet" href="./media.css">
+  <script type="module" src="./media.js"></script>
+</head>
+<body>
+  <header><a href="./">← Back to chat</a><span>LOCAL AI STUDIO</span><a href="http://127.0.0.1:8188" target="_blank" rel="noopener">Open ComfyUI ↗</a></header>
+  <main>
+    <div class="intro"><p class="eyebrow">CREATE ON YOUR MAC</p><h1>Bring an idea to life.</h1><p>Generate an image or a short silent video from a description.</p></div>
+    <div class="studio">
+      <section class="controls" aria-label="Generation settings">
+        <div class="engine"><span id="engine-status" role="status">Checking media engine…</span><button id="refresh" type="button">Refresh</button></div>
+        <p id="engine-help" hidden>Start the media engine from your project folder: <code>./media.sh</code>, then click Refresh.</p>
+        <form id="create-form">
+          <label for="media-model">Model</label>
+          <select id="media-model" disabled><option>Loading models…</option></select>
+          <p id="model-note" class="muted"></p>
+          <label for="media-prompt">Describe your scene</label>
+          <textarea id="media-prompt" rows="7" maxlength="2000" required placeholder="A small cabin beside a still lake, mountains in the distance, warm evening light…"></textarea>
+          <button id="generate" class="primary" disabled>Create</button>
+          <button id="cancel" type="button" hidden>Stop generation</button>
+        </form>
+        <p class="muted">Run one generation at a time. Video can take several minutes or longer. Close other heavy AI apps to give generation more memory.</p>
+      </section>
+      <section class="preview" aria-label="Generated result">
+        <p id="generation-status" role="status" aria-live="polite">Your creation will appear here.</p>
+        <div id="results"><div class="empty-art" aria-hidden="true">✧</div></div>
+        <p id="output-note" class="muted">Saved locally in <code>data/media/output/</code>.</p>
+      </section>
+    </div>
+  </main>
+</body>
+</html>

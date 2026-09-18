@@ -7,6 +7,9 @@
 models/
 logs/
 .cache/
+runtimes/
+.venv-media/
+__pycache__/
 
 # Node and editor artifacts
 node_modules/

@@ -1,8 +1,11 @@
+import { agentRequest, disconnectAgent, initializeAgentUI } from './agent-client.js';
+import { extendAgentSession } from './agent-tools.js';
 import { createFileTools } from './file-tools.js';
 const $ = (id) => document.getElementById(id);
 let files = new Map(), opened = new Map(), active = null, diff = false, changes = false;
 let folded = new Set();
 let welcomeOpen = true;
+let serverWorkspace = null;
 let workspaceId = crypto.randomUUID(), workspaceName = '', folderReady = false;
 const ignored = new Set(['.git', 'node_modules', '.DS_Store', '__pycache__', '.venv']);
 const dirty = (f) => f.text !== f.saved;
@@ -28,7 +31,10 @@ async function chooseFolder() {
     tell('Reading folder…'); await walk(root); setFolder(root.name, next, true);
   } catch (e) { if (e.name !== 'AbortError') tell(`Cannot open folder: ${e.message}`); }
 }
-function setFolder(name, next, writable) {
+function setFolder(name, next, writable, agent = null) {
+  window.dispatchEvent(new Event('workspace-access-changed'));
+  if (serverWorkspace && !agent) disconnectAgent().catch(error=>tell(error.message));
+  serverWorkspace = agent;
   workspaceId = crypto.randomUUID(); workspaceName = name; folderReady = true;
   $('ai-folder-access').disabled = false; $('ai-folder-access').checked = true;
   files = next; opened = new Map(); active = null; diff = false;
@@ -309,7 +315,7 @@ $('review-code').onclick = async () => {
   } finally { $('review-code').disabled = false; }
 };
 
-function workspaceSnapshot() { return { id: workspaceId, name: workspaceName, files, enabled: folderReady && $('ai-folder-access').checked }; }
+function workspaceSnapshot() { return { id: workspaceId, name: workspaceName, files, agent: serverWorkspace, enabled: folderReady && $('ai-folder-access').checked }; }
 async function workspaceText(path, snapshot) {
   if (snapshot.id !== workspaceId || !$('ai-folder-access').checked) throw new Error('Folder access changed.');
   const item = opened.get(path);
@@ -323,10 +329,12 @@ function updateFolderConnection() {
     : !$('ai-folder-access').checked ? `${workspaceName} · AI folder access off`
     : `${workspaceName} · ${files.size} files · AI folder access on`;
 }
-$('ai-folder-access').onchange = () => { workspaceId = crypto.randomUUID(); updateFolderConnection(); };
-window.localFileTools = createFileTools({ getWorkspace: workspaceSnapshot, getText: workspaceText });
+$('ai-folder-access').onchange = () => { workspaceId = crypto.randomUUID(); updateFolderConnection(); window.dispatchEvent(new Event('workspace-access-changed')); };
+const baseTools = createFileTools({ getWorkspace: workspaceSnapshot, getText: workspaceText });
+window.localFileTools = () => extendAgentSession(baseTools(),workspaceSnapshot(),workspaceSnapshot);
 window.addEventListener('workspace-review-proposal', async event => {
   const proposal = event.detail;
+  if(proposal?.changeset)return;
   try {
     if (proposal.workspaceId !== workspaceId || !$('ai-folder-access').checked) throw new Error('Reopen or re-enable the original folder and ask the AI for a fresh proposal.');
     const snapshot = workspaceSnapshot();
@@ -343,3 +351,33 @@ window.addEventListener('workspace-review-proposal', async event => {
     tell('AI proposal loaded for review. Save to write it to the folder.');
   } catch (error) { alert(`Cannot review proposal: ${error.message}`); }
 });
+
+window.workspaceDirtyPaths = () => [...opened].filter(([,file])=>dirty(file)).map(([path])=>path);
+function serverFiles(connection, paths) {
+  return new Map(paths.map(path=>{
+    const getFile=async()=>{const result=await agentRequest(`file?path=${encodeURIComponent(path)}`,undefined,connection.token);return {size:new Blob([result.content]).size,text:async()=>result.content};};
+    return [path,{getFile,handle:{createWritable:async()=>{
+      const before=await (await getFile()).text();let after=before;
+      return {write:async text=>{after=text;},close:async()=>{const item=await agentRequest('changes',{changes:[{path,before,after}],explanation:'Editor save'},connection.token);await agentRequest('apply',{id:item.id},connection.token);}};
+    }}}];
+  }));
+}
+window.addEventListener('agent-connected',event=>{const connection=event.detail;setFolder(connection.name,serverFiles(connection,connection.files),true,connection);});
+window.addEventListener('agent-disconnected',()=>{serverWorkspace=null;folderReady=false;files=new Map();opened=new Map();active=null;workspaceId=crypto.randomUUID();$('ai-folder-access').checked=false;$('ai-folder-access').disabled=true;updateFolderConnection();renderTree();renderEditor();renderChanges();});
+window.refreshAgentFiles = async connection=>{
+  if(!connection||serverWorkspace?.token!==connection.token)return;
+  try{
+    const result=await agentRequest('files',undefined,connection.token);
+    if(serverWorkspace?.token!==connection.token)return;
+    files=serverFiles(connection,result.files);
+    for(const [path,file] of opened){
+      if(dirty(file))continue;
+      if(!files.has(path)){opened.delete(path);if(active===path)active=null;continue;}
+      const value=await (await files.get(path).getFile()).text();
+      if(serverWorkspace?.token!==connection.token)return;
+      opened.set(path,{...files.get(path),text:value,saved:value,baseline:file.baseline});
+    }
+    renderTree();renderEditor();renderChanges();updateFolderConnection();
+  }catch(error){tell(error.message);}
+};
+initializeAgentUI();

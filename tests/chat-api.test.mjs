@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -15,6 +15,22 @@ test('storage HTTP API persists chats, serves attachments, and rejects cross-ori
     child.stdout.on('data',chunk=>{ log+=chunk;const match=/http:\/\/localhost:\d+/.exec(log);if(match){clearTimeout(timer);resolve(match[0]);} });
   });
   const headers={'content-type':'application/json'};
+  const root=join(directory,'project');mkdirSync(root);writeFileSync(join(root,'file.txt'),'original');
+  const api=async(route,body,token)=>fetch(`${base}/api/agent/${route}`,{method:body===undefined?'GET':'POST',headers:{...headers,...(token?{'x-workspace-token':token}:{})},...(body===undefined?{}:{body:JSON.stringify(body)})});
+  assert.equal((await api('files')).status,403);
+  const connection=await (await api('connect',{path:root})).json();
+  assert.deepEqual((await (await api('files',undefined,connection.token)).json()).files,['file.txt']);
+  const proposal=await (await api('changes',{changes:[{path:'new.txt',before:null,after:'new'}]},connection.token)).json();
+  assert.equal(existsSync(join(root,'new.txt')),false);
+  assert.equal((await api('apply',{id:proposal.id},connection.token)).status,200);
+  assert.equal(existsSync(join(root,'new.txt')),true);
+  assert.equal((await api('undo',{id:proposal.id},connection.token)).status,200);
+  assert.equal(existsSync(join(root,'new.txt')),false);
+  const job=await (await api('jobs',{command:'touch command-marker',approved:true},connection.token)).json();
+  assert.equal(job.status,'pending');assert.equal(existsSync(join(root,'command-marker')),false);
+  await api('cancel-job',{id:job.id},connection.token);
+  assert.equal((await api('approve-job',{id:job.id},connection.token)).status,409);
+
   const thread={id:'api-test',title:'API test',createdAt:1,messages:[{role:'user',content:[{type:'image_url',image_url:{url:'data:image/png;base64,aGVsbG8='}}]}]};
   let response=await fetch(`${base}/api/threads/api-test`,{method:'PUT',headers,body:JSON.stringify({thread,version:0})});
   assert.equal(response.status,200); const saved=(await response.json()).thread;

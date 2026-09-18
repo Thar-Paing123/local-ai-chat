@@ -13,6 +13,8 @@
 //
 // Usage: node server.mjs   →   http://localhost:5173
 
+import { createAgentService } from './agent-service.mjs';
+import { createMediaService } from './media-service.mjs';
 import { createChatStorage } from './chat-storage.mjs';
 import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
@@ -21,14 +23,17 @@ import { fileURLToPath } from 'node:url';
 
 const chatStorage = createChatStorage(process.env.CHAT_DATA_DIR || fileURLToPath(new URL('./data/', import.meta.url)));
 
+const agentService = createAgentService(process.env.CHAT_DATA_DIR || fileURLToPath(new URL('./data/', import.meta.url)));
+
 const PORT = Number(process.env.PORT ?? 8000);
+const mediaService = createMediaService();
 const legacyBaseUrl = (process.env.LLM_BASE_URL ?? 'http://127.0.0.1:11434/v1').replace(/\/$/, '');
 const legacyModel = process.env.LLM_MODEL ?? 'qwen2.5-coder:7b';
 const legacyApiKey = process.env.LLM_API_KEY ?? 'ollama';
 const backends = {
   ollama: { label: 'Ollama', baseUrl: (process.env.OLLAMA_BASE_URL ?? legacyBaseUrl).replace(/\/$/, ''), apiKey: process.env.OLLAMA_API_KEY ?? legacyApiKey, model: process.env.OLLAMA_MODEL ?? legacyModel },
   grok: { label: 'Grok (xAI)', baseUrl: (process.env.XAI_BASE_URL ?? 'https://api.x.ai/v1').replace(/\/$/, ''), apiKey: process.env.XAI_API_KEY ?? '', model: process.env.XAI_MODEL ?? 'grok-3-mini' },
-  gemini: { label: 'Gemini', baseUrl: (process.env.GEMINI_BASE_URL ?? 'https://generativelanguage.googleapis.com/v1beta/openai').replace(/\/$/, ''), apiKey: process.env.GEMINI_API_KEY ?? '', model: process.env.GEMINI_MODEL ?? 'gemini-2.5-flash' },
+  gemini: { label: 'Gemini', baseUrl: (process.env.GEMINI_BASE_URL ?? 'https://generativelanguage.googleapis.com/v1beta/openai').replace(/\/$/, ''), apiKey: process.env.GEMINI_API_KEY ?? '', model: process.env.GEMINI_MODEL ?? 'gemini-3.1-pro-preview' },
 };
 
 const PUBLIC_DIR = join(fileURLToPath(new URL('.', import.meta.url)), 'public');
@@ -104,6 +109,10 @@ async function proxyChat(req, res) {
   const provider = payload.provider ?? 'ollama';
   const backend = backends[provider] ?? backends.ollama;
   delete payload.provider;
+  // Migrate retired model IDs retained in browser settings.
+  if (provider === 'gemini' && ['gemini-3-pro-preview', 'models/gemini-3-pro-preview'].includes(payload.model)) {
+    payload.model = 'gemini-3.1-pro-preview';
+  }
   const controller = new AbortController();
   res.on('close', () => controller.abort());
 
@@ -147,6 +156,61 @@ const server = createServer(async (req, res) => {
   if (pathname.startsWith('/api/')) {
     const host = req.headers.host || '';
     if (!/^(localhost|127\.0\.0\.1)(:\d+)?$/.test(host) || (req.headers.origin && req.headers.origin !== `http://${host}`) || req.headers['sec-fetch-site'] === 'cross-site') return json(res, 403, { error: 'Local same-origin requests only.' });
+  }
+  if (pathname.startsWith('/api/media/')) {
+    try {
+      if (req.method === 'GET' && pathname === '/api/media/status') return json(res, 200, await mediaService.status());
+      if (req.method === 'POST' && pathname === '/api/media/generate') {
+        if (!req.headers['content-type']?.startsWith('application/json')) return json(res, 415, { error: 'Use application/json.' });
+        let input;
+        try { input = JSON.parse(await readBody(req, 16384)); } catch { return json(res, 400, { error: 'Invalid generation request.' }); }
+        return json(res, 202, await mediaService.generate(input));
+      }
+      const cancel = pathname.match(/^\/api\/media\/jobs\/([a-zA-Z0-9-]+)\/cancel$/);
+      if (req.method === 'POST' && cancel) return json(res, 200, await mediaService.cancel(cancel[1]));
+      const match = pathname.match(/^\/api\/media\/jobs\/([a-zA-Z0-9-]+)(?:\/outputs\/(\d+))?$/);
+      if (req.method === 'GET' && match) {
+        if (match[2] === undefined) return json(res, 200, await mediaService.job(match[1]));
+        const output = await mediaService.output(match[1], Number(match[2]));
+        res.writeHead(200, { 'content-type': output.headers.get('content-type') || 'application/octet-stream', 'cache-control': 'private, max-age=3600' });
+        for await (const chunk of output.body) {
+          if (!res.write(chunk)) await new Promise(resolve => res.once('drain', resolve));
+        }
+        return res.end();
+      }
+      return json(res, 404, { error: 'Media route not found.' });
+    } catch (error) {
+      if (res.headersSent) return res.destroy();
+      return json(res, error.status || 500, { error: error.message });
+    }
+  }
+  if (pathname.startsWith('/api/agent/')) {
+    try {
+      if (req.method !== 'GET' && !req.headers['content-type']?.startsWith('application/json')) return json(res,415,{error:'Use application/json.'});
+      const input = req.method === 'POST' ? JSON.parse(await readBody(req,16*1024*1024)) : {};
+      const token = req.headers['x-workspace-token'];
+      const query = new URL(req.url,'http://localhost').searchParams;
+      const route = pathname.slice('/api/agent/'.length);
+      let result;
+      if(route==='connect' && req.method==='POST') result=agentService.connect(input.path);
+      else if(route==='disconnect' && req.method==='POST') result=agentService.disconnect(token);
+      else if(route==='files' && req.method==='GET') result=agentService.list(token);
+      else if(route==='file' && req.method==='GET') result=agentService.read(token,query.get('path'));
+      else if(route==='changes' && req.method==='GET') result=agentService.changeHistory(token);
+      else if(route==='changes' && req.method==='POST') result=agentService.prepareChanges(token,input.changes,input.explanation);
+      else if(route==='apply' && req.method==='POST') result=agentService.apply(token,input.id);
+      else if(route==='undo' && req.method==='POST') result=agentService.undo(token,input.id);
+      else if(route==='reject' && req.method==='POST') result=agentService.reject(token,input.id);
+      else if(route==='recover' && req.method==='POST') result=agentService.recover(token,input.id);
+      else if(route==='git' && req.method==='POST') result=await agentService.gitInfo(token,input.kind);
+      else if(route==='jobs' && req.method==='GET') result=agentService.jobs(token);
+      else if(route==='jobs' && req.method==='POST') result=await agentService.prepareJob(token,input);
+      else if(route==='job' && req.method==='GET') result=agentService.job(token,query.get('id'));
+      else if(route==='approve-job' && req.method==='POST') result=await agentService.approveJob(token,input.id);
+      else if(route==='cancel-job' && req.method==='POST') result=agentService.cancelJob(token,input.id);
+      else return json(res,404,{error:'Unknown agent operation.'});
+      return json(res,200,result);
+    }catch(error){return json(res,error.status || 400,{error:error.message});}
   }
   if (pathname === '/api/threads' || pathname.startsWith('/api/threads/') || pathname.startsWith('/api/attachments/')) {
     try {
@@ -220,4 +284,4 @@ server.listen(PORT, '127.0.0.1', () => {
   console.log(`backends       →  ${Object.values(backends).map(({ label, baseUrl }) => `${label}: ${baseUrl}`).join(' | ')}`);
 });
 
-process.on('SIGTERM', () => server.close(() => { chatStorage.close(); process.exit(0); }));
+process.on('SIGTERM', async () => { await agentService.close(); server.close(() => { chatStorage.close(); process.exit(0); }); });

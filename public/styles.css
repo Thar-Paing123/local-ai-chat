@@ -420,3 +420,35 @@ kbd { font: inherit; }
 .chat-storage { display: flex; align-items: center; gap: 8px; margin-bottom: 7px; font-size: 10px; color: #888; }
 .chat-storage button { background: none; color: #91c9f7; border: 1px solid #555; border-radius: 3px; font-size: 11px; }
 .saved-attachment { display: block; margin-top: 5px; font-size: 11px; overflow-wrap: anywhere; }
+:root { --agent-panel-height: 330px; }
+#titlebar > button { color: #ccc; background: #252526; border: 1px solid #454545; border-radius: 4px; font-size: 11px; }
+.agent-panel-open #app { height: calc(100dvh - 62px - var(--agent-panel-height)); }
+#agent-panel { height: var(--agent-panel-height); border-top: 1px solid #555; background: #181818; min-height: 0; overflow: auto; }
+#agent-root { text-transform: none; letter-spacing: 0; color: #aaa; }
+#agent-status { padding: 5px 14px; color: #9bbad0; font-size: 11px; }
+.agent-columns { display: grid; grid-template-columns: minmax(260px, 1.4fr) minmax(220px, 1fr) minmax(150px, .7fr); gap: 18px; padding: 0 14px 14px; }
+.agent-columns section { min-width: 0; }
+.agent-columns h3 { margin: 5px 0; font-size: 12px; font-weight: 500; }
+.agent-columns input, .agent-columns textarea, #agent-path, #agent-new-path, #agent-new-content { box-sizing: border-box; display: block; width: 100%; margin: 5px 0; padding: 6px; font: 12px var(--mono); background: #252526; color: #ddd; border: 1px solid #555; border-radius: 3px; }
+.agent-columns button { background: #252526; color: #ccc; border: 1px solid #555; border-radius: 3px; font-size: 11px; padding: 4px 8px; }
+.agent-command-row, .agent-actions { display: flex; align-items: center; gap: 6px; }
+.agent-command-row input { flex: 1; min-width: 0; }
+.agent-command-row button { flex: none; }
+.agent-warning { font-size: 10px; color: #c6b48d; margin: 6px 0; }
+#agent-command-preview, #agent-terminal, #agent-git-output { white-space: pre-wrap; overflow-wrap: anywhere; font: 11px/1.5 var(--mono); max-height: 130px; overflow: auto; margin: 8px 0; }
+#agent-approve-job { background: #0078d4; color: white; }
+#agent-job-status { font-size: 11px; }
+#agent-history { display: flex; flex-direction: column; align-items: stretch; gap: 6px; margin-top: 8px; max-height: 210px; overflow: auto; }
+#agent-history button { text-align: left; overflow-wrap: anywhere; }
+dialog[id^="agent-"] { color: #ccc; background: #252526; border: 1px solid #555; border-radius: 6px; padding: 20px; width: min(650px, calc(100vw - 30px)); max-height: 85dvh; overflow: auto; }
+dialog[id^="agent-"]::backdrop { background: #0009; }
+dialog[id^="agent-"] h2 { font-size: 18px; margin: 0 0 10px; }
+dialog[id^="agent-"] p { font-size: 12px; }
+#agent-review { width: min(1000px, calc(100vw - 30px)); }
+.agent-diff { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; padding: 10px 0; }
+.agent-diff section { min-width: 0; background: #191919; padding: 8px; }
+.agent-diff strong { font-size: 11px; color: #aaa; }
+.agent-diff pre { white-space: pre; overflow: auto; max-height: 280px; font: 12px/1.5 var(--mono); }
+.agent-plan { margin: 12px 0; border-left: 2px solid #0078d4; padding-left: 10px; font-size: 12px; }
+.agent-plan li { margin: 5px 0; }
+@media (max-width: 850px) { .agent-columns { grid-template-columns: minmax(220px,1fr); } :root { --agent-panel-height: 260px; } #titlebar { gap: 6px; } #title-open { width: auto; } }

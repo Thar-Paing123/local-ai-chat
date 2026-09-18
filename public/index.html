@@ -7,9 +7,9 @@
   <link rel="stylesheet" href="./styles.css">
 </head>
 <body>
-  <header id="titlebar"><span class="app-mark">⌘</span><span>Local Code Assistant</span><button id="title-open">Open Folder…</button><span class="title-caption">Your workspace, with AI</span></header>
+  <header id="titlebar"><span class="app-mark">⌘</span><span>Local Code Assistant</span><button id="title-open">Open Folder…</button><button id="agent-connect-open">Connect agent folder…</button><a href="./media.html" style="color:inherit;margin-left:12px">Create images &amp; videos</a><span class="title-caption">Your workspace, with AI</span></header>
   <div id="app">
-    <nav id="activity" aria-label="Workspace views"><button id="view-files" class="active" title="Explorer" aria-label="Explorer">▱</button><button id="view-changes" title="Changes" aria-label="Changes">⑂<span id="change-count">0</span></button><button id="view-extensions" title="Extensions" aria-label="Extensions">▦</button><button id="view-chat" title="Toggle assistant" aria-label="Toggle assistant">✧</button><button id="view-settings" title="Settings" aria-label="Settings">⚙</button></nav>
+    <nav id="activity" aria-label="Workspace views"><button id="view-files" class="active" title="Explorer" aria-label="Explorer">▱</button><button id="view-changes" title="Changes" aria-label="Changes">⑂<span id="change-count">0</span></button><button id="view-extensions" title="Extensions" aria-label="Extensions">▦</button><button id="view-chat" title="Toggle assistant" aria-label="Toggle assistant">✧</button><button id="agent-toggle" title="Terminal, Git, and task history" aria-label="Agent tools">›_</button><button id="view-settings" title="Settings" aria-label="Settings">⚙</button></nav>
     <aside id="explorer"><div class="pane-heading"><span id="explorer-title">EXPLORER</span><button id="open-folder" title="Open folder" aria-label="Open folder">＋</button></div><div id="folder-name">NO FOLDER OPENED</div><div id="file-tree"><div class="explorer-empty">Open a folder to start exploring your project.<button id="empty-open" class="primary">Open Folder</button><p>Choose which folder this app can access.</p></div></div><div id="changes-list" hidden></div><section id="extensions-panel" hidden aria-label="Extensions">
       <div class="extension-search"><input id="extension-search" type="search" placeholder="Search extensions" aria-label="Search extensions"><select id="extension-filter" aria-label="Filter extensions"><option value="all">All extensions</option><option value="installed">Installed</option></select></div>
       <p class="extension-info">Add-ons for Local Code Assistant. VS Code / VSIX packages are not supported.</p>
@@ -88,6 +88,24 @@
     </main>
     </section>
   </div>
+  <section id="agent-panel" hidden aria-label="Agent tools">
+    <div class="pane-heading"><span>AGENT TOOLS · <span id="agent-root">No agent folder connected</span></span><div><button id="agent-refresh">Refresh</button><button id="agent-disconnect">Disconnect</button><button id="agent-hide" aria-label="Hide agent panel">×</button></div></div>
+    <div id="agent-status" role="status">Connect an agent folder to run commands, use Git, and review multi-file changes.</div>
+    <div class="agent-columns">
+      <section><h3>Terminal & approvals</h3><div class="agent-command-row"><input id="agent-command" aria-label="Terminal command" placeholder="npm test"><button id="agent-prepare-command">Review command</button></div>
+        <p class="agent-warning">Approved commands run with your macOS account permissions. The working folder is not a sandbox.</p>
+        <pre id="agent-command-preview"></pre><div class="agent-actions"><button id="agent-approve-job" hidden>Run approved command</button><button id="agent-reject-job" hidden>Reject</button><button id="agent-cancel-job" hidden>Stop command</button><span id="agent-job-status"></span></div><pre id="agent-terminal" aria-label="Command output"></pre>
+      </section>
+      <section><h3>Source control</h3><div class="agent-actions"><button id="agent-git-status">Status</button><button id="agent-git-diff">Diff</button><button id="agent-git-log">Log</button></div><pre id="agent-git-output"></pre>
+        <textarea id="agent-git-paths" rows="2" aria-label="Files to commit" placeholder="Files to commit, one relative path per line"></textarea><input id="agent-git-message" aria-label="Commit message" placeholder="Commit message"><button id="agent-git-commit">Review commit</button>
+        <div class="agent-command-row"><input id="agent-git-remote" aria-label="Git remote" value="origin"><button id="agent-git-push">Review push</button></div>
+      </section>
+      <section><h3>Change & command history</h3><button id="agent-new-file">New file…</button><div id="agent-history"></div></section>
+    </div>
+  </section>
+  <dialog id="agent-connect-dialog"><form method="dialog"><h2>Connect agent folder</h2><p>Enter the absolute path of the project on this Mac. This connects the explorer, file tools, terminal, and Git to the same folder. Edits and commands require your review.</p><input id="agent-path" aria-label="Absolute project folder path" placeholder="/Users/you/projects/my-project" required><p id="agent-connect-error" role="status"></p><div class="dialog-actions"><button value="cancel">Cancel</button><button id="agent-connect" type="button">Connect folder</button></div></form></dialog>
+  <dialog id="agent-review"><form method="dialog"><h2 id="agent-review-title">Review changes</h2><p id="agent-review-status" role="status"></p><div id="agent-review-content"></div><div class="dialog-actions"><button value="close">Close</button><button id="agent-reject" type="button">Reject</button><button id="agent-apply" type="button">Apply all to disk</button><button id="agent-undo" type="button" hidden>Undo this change set</button><button id="agent-recover" type="button" hidden>Restore originals</button></div></form></dialog>
+  <dialog id="agent-new-file-dialog"><form method="dialog"><h2>Create a file</h2><p id="agent-new-error" role="status"></p><input id="agent-new-path" aria-label="New file path" placeholder="src/new-file.js"><textarea id="agent-new-content" rows="10" aria-label="New file contents" spellcheck="false"></textarea><div class="dialog-actions"><button value="cancel">Cancel</button><button id="agent-prepare-file" type="button">Review new file</button></div></form></dialog>
   <footer id="statusbar"><span>⌁ &nbsp; Workspace</span><span id="workspace-status">No folder opened</span><span id="editor-position">Ready</span><span>UTF-8</span></footer>
   <dialog id="apply-code-dialog" aria-labelledby="apply-code-title">
     <form method="dialog"><h2 id="apply-code-title">Apply code to a file</h2><p>This replaces the entire file with the selected code block. Use a complete file, not a snippet.</p>

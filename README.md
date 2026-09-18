@@ -1,5 +1,69 @@
 # Local AI Code Assistant
 
+## Local image and video creation
+
+Click **Create images & videos** in the title bar, or open
+<http://localhost:8000/media.html>. Start the generation engine in another terminal:
+
+```bash
+./media.sh
+```
+
+Choose a model, describe the scene, and click **Create**. **Stop generation** cancels
+that job. The creation page shows the result and a download link. Generations remain
+in `data/media/output/` even after closing the page. The page can reconnect to its
+current job after a refresh; restarting the Node server clears its in-memory job
+links, but does not delete generated files.
+
+| Model | Default output | Model files on disk |
+|---|---|---|
+| Stable Diffusion 1.5 | 512 × 512 image | 4.27 GB |
+| SDXL Base 1.0 | 768 × 768 image | 6.94 GB |
+| Wan 2.1 T2V 1.3B | 416 × 240 silent video, 17 frames at 16 fps | 9.83 GB including text encoder and VAE |
+
+These presets target the M3 Pro with 18 GB unified memory. Video is experimental
+and intentionally starts with about a one-second draft. Longer or higher-resolution
+video needs substantially more memory and time. Close heavy AI applications before
+generating; the app submits one media job at a time. Wan's quantized text encoder
+runs on CPU because Apple Metal does not support its FP8 storage format. Tiled VAE
+decoding reduces memory use. The launcher retains PyTorch's default memory limits.
+The Mac preset uses native PyTorch attention and BF16 computation. Wan uses the
+Euler sampler: UniPC produced blank/neon frames during local verification,
+consistent with a [reported MPS sampler issue](https://github.com/Comfy-Org/ComfyUI/issues/15921).
+
+The isolated Python 3.12 environment is `.venv-media/`, ComfyUI lives in
+`runtimes/ComfyUI/`, and weights live in `models/media/`. Outputs and runtime data
+stay under `data/media/`. These large/local directories are excluded from Git.
+ComfyUI listens only on `127.0.0.1:8188`, with cloud API nodes disabled. Its advanced
+interface is at <http://127.0.0.1:8188>. This is separate from the Ollama chat model
+selector. Media requests use the local engine regardless of the chat provider.
+
+To reproduce the installation (requires Git, curl, and [uv](https://docs.astral.sh/uv/)):
+
+```bash
+./scripts/install-media.sh
+```
+
+The installer pins ComfyUI at `387f98aa2822f684b8597959a52a467d88cc4806`, uses
+`scripts/media-requirements.lock`, resumes partial downloads, and verifies file sizes
+and publisher SHA256 hashes from `scripts/media-models.json`. Approximately 21 GB
+of weights plus the Python runtime are required; it keeps at least 15 GiB free.
+The weights retain their publishers' licenses: SD 1.5 CreativeML Open RAIL-M,
+SDXL CreativeML Open RAIL++-M, and Wan Apache 2.0. See the linked model repositories
+in the manifest for license details.
+
+`workflows/media/*-api.json` contains equivalent ComfyUI API graphs. The advanced
+editor can open `workflows/media/wan-comfyui.json`, adapted from the
+[official Wan example](https://comfyanonymous.github.io/ComfyUI_examples/wan/).
+The simple creation page uses the presets in `media-service.mjs`.
+
+For troubleshooting, run `./media.sh` in a terminal to see errors. After installing
+models while the engine is running, click **Refresh** on the creation page. If a
+generation exhausts memory, use SD 1.5 or reduce the advanced workflow's video
+dimensions/frame count. Stop the media engine with Ctrl+C in its terminal.
+
+Run project checks with `node --test tests/*.test.mjs`.
+
 A browser chat UI for coding help, served by your own Ollama or vLLM instance. Nothing
 leaves the machine — no API keys, no network calls, works offline.
 
@@ -251,7 +315,7 @@ Open a project folder and leave **AI folder access** checked above the chat inpu
 
 The app automatically chooses native tool calling or a JSON compatibility mode. Ollama capability metadata identifies models without native tools; rejected tool requests and supported tool requests returned as plain JSON also trigger compatibility mode. Both modes use the same scoped file tools and review-only edit proposals. Models still need to follow instructions: malformed or ordinary text responses never execute file actions. The installed `qwen2.5-coder:7b` was verified live reading a test file and proposing an edit through this fallback. See [Ollama tool calling](https://docs.ollama.com/capabilities/tool-calling) for the native protocol.
 
-Folder reads are sent to your selected model provider. Turn off **AI folder access** to revoke access for subsequent tool calls. Access is scoped to the folder selected in the browser; typing a path cannot grant access to another folder. Folder changes invalidate active tool sessions and old proposals. Proposals never automatically write, create, delete, or execute files. File text is limited to 400 KB, read results to 40,000 characters, searches to 100 files / 50 matches per call, and each reply to eight tool rounds. Permission/read failures are reported as tool results. Refreshing requires selecting the folder again.
+Folder reads are sent to your selected model provider. Turn off **AI folder access** to revoke access for subsequent tool calls. Access is scoped to the folder selected in the browser; typing a path cannot grant access to another folder. Folder changes invalidate active tool sessions and old proposals. Proposals never automatically write, create, delete, or execute files. File text is limited to 400 KB, read results to 40,000 characters, searches to 100 files / 50 matches per call, and each reply to 24 tool rounds. Permission/read failures are reported as tool results. Refreshing requires selecting the folder again.
 
 Run the dependency-free tool tests with:
 
@@ -289,3 +353,31 @@ The migration runs in the browser because the server cannot read browser localSt
 - Draft input, pending attachments, and folder permissions still stay in browser memory. Database storage does not grant filesystem access to project folders.
 
 Run automated tests with `node --test tests/*.test.mjs`.
+
+## Coding agent workspace
+
+Click **Connect agent folder…** in the title bar, enter the absolute project path on this Mac, and click **Connect folder**. This connects the explorer and AI file tools to the Node.js server's workspace. Browser-only **Open Folder** remains available for file viewing and single-file editing, but terminal, Git, batch edits, and undo require an agent connection. Reconnect after a reload; only the last folder path is remembered, not its access token.
+
+### Multi-file edits and new files
+
+Ask the assistant to inspect your project and propose a change. It can read files, make unique exact-text replacements, create new files, and group up to 30 changes in one proposal. Click **Review changes** to compare the before/after contents, then **Apply all to disk**. Nothing is written when a proposal is generated. All files are checked against their original contents before applying. Unsaved editor buffers must be saved or closed first.
+
+The **›_ Agent tools** activity button opens terminal, source control, and history. **New file…** creates a manual new-file proposal. Open an applied change set in history and choose **Undo this change set** to restore original contents and remove files created by that change. Undo refuses to overwrite external edits. Individual files are written by atomic replacement; interrupted batches are marked for recovery. **Restore originals** rolls back a recoverable interrupted batch. A conflict requires manually reconciling the displayed before/after backups. Empty directories created for new files may remain after undo.
+
+### Terminal and builds
+
+The assistant can request commands through `run_command`; you can also enter a command in the terminal panel. The exact command and working folder are shown before **Run approved command** becomes available. **Reject** prevents execution; **Stop command** stops a running process group. Output, exit code, timeouts, and command history are retained. Commands default to a two-minute timeout (up to five minutes), with output capped at 200,000 characters. An approval can be used only once.
+
+**Commands run as your macOS user, not inside a filesystem sandbox.** A command can access files outside its working directory, run project scripts or Git hooks, and use your Git credentials. Approve only commands you intend to run. Provider API-key environment variables are not passed into subprocesses. AI text and file contents cannot directly approve commands.
+
+### Git
+
+Use **Status**, **Diff**, and **Log** in the source-control panel, or ask the assistant to inspect Git. Connect the repository root for Git tools. Enter specific relative file paths (one per line) and a commit message, then choose **Review commit**. Only those files are committed; unrelated staged files remain staged. **Review push** shows the current branch and existing remote, and requires separate approval. Pushes do not force-update branches. Changing HEAD, remote URL, selected contents, or staging after preparation invalidates the corresponding approval. Git hooks may run during approved commits and pushes.
+
+### Plans, progress, and recovery
+
+The assistant has an `update_plan` tool with pending/in-progress/completed steps. Task state, plans, and tool-round checkpoints are saved with chat messages in `data/chats.sqlite`. Interrupted or review-pending tasks show **Continue task**. Reconnect the original agent folder before continuing. The next turn receives saved progress, rechecks files, and asks for fresh command approvals; commands are never automatically replayed after a restart.
+
+Command jobs, before/after backups, and change-set history are stored in `data/agent.sqlite`. Include this file in whole-data-directory backups. Pending reviews survive reconnection. Running jobs become interrupted on an unexpected server restart, rather than being rerun; inspect their output and workspace before retrying. Graceful server shutdown and disconnection cancel running commands. After an abrupt process crash, detached subprocesses may need manual inspection before retrying.
+
+Agent file APIs reject traversal, `.git` mutation, and symlinks. Connections are restricted to local same-origin requests and use per-connection tokens. File tools operate only inside the connected folder. This adds a local agent workflow; it does not guarantee that a small local model can correctly solve every coding task.

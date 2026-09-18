@@ -152,6 +152,21 @@ function paintBody(body, msg) {
     const summary = document.createElement('summary'); summary.textContent = msg.streaming ? msg.activity.at(-1) : 'File tool activity';
     const entries = document.createElement('pre'); entries.textContent = msg.activity.join('\n'); log.append(summary, entries); body.append(log);
   }
+  if (msg.agentRun) {
+    const panel=document.createElement('div');panel.className='agent-plan';
+    const label=document.createElement('strong');label.textContent=`Task: ${msg.agentRun.status === 'running' && !msg.streaming ? 'interrupted' : msg.agentRun.status}`;panel.append(label);
+    const list=document.createElement('ol');
+    for(const step of msg.agentRun.plan || []){const li=document.createElement('li');li.textContent=`${step.status === 'completed' ? '✓' : step.status === 'in_progress' ? '→' : '○'} ${step.title}`;list.append(li);}panel.append(list);
+    if(!msg.streaming && (msg.interrupted || ['running','failed','stopped','awaiting_review'].includes(msg.agentRun.status))){
+      const resume=document.createElement('button');resume.textContent='Continue task';
+      resume.onclick=async()=>{
+        if(controller||preparing)return;
+        const thread=threads.find(t=>t.messages.includes(msg));if(!thread)return;
+        activeId=thread.id;renderThreads();renderMessages();await stream(thread,msg);
+      };panel.append(resume);
+    }
+    body.append(panel);
+  }
   for (const proposal of msg.proposals || []) {
     const card = document.createElement('div'); card.className = 'file-proposal';
     const title = document.createElement('strong'); title.textContent = proposal.path;
@@ -376,8 +391,10 @@ async function regenerate() {
   await stream(t);
 }
 
-async function stream(thread) {
-  const assistant = { role: 'assistant', content: '', streaming: true };
+async function stream(thread, resumeFrom = null) {
+  const assistant = { role: 'assistant', content: '', streaming: true, agentRun: {
+    id: uid(), status: 'running', startedAt: Date.now(), plan: resumeFrom?.agentRun?.plan || [], resumedFrom: resumeFrom?.agentRun?.id || null,
+  } };
   thread.messages.push(assistant);
 
   const node = messageNode(assistant);
@@ -408,6 +425,8 @@ async function stream(thread) {
 
   try {
     const session = window.localFileTools?.();
+    assistant.agentRun.workspace = window.agentConnection?.()?.root || null;
+    if(resumeFrom?.agentRun?.workspace && resumeFrom.agentRun.workspace !== assistant.agentRun.workspace)throw new Error('Reconnect the original agent folder before continuing this task.');
     const lastUser = thread.messages.filter(message => message.role === 'user').at(-1);
     if (isFolderAccessQuestion(lastUser?.content)) {
       assistant.content = await folderAccessReply(session, controller.signal);
@@ -420,6 +439,7 @@ async function stream(thread) {
         messages: [
           { role: 'system', content: settings.system },
           ...thread.messages.filter(m => m !== assistant && !m.error).map(({ role, content }) => ({ role, content })),
+          ...(resumeFrom ? [{role:'user',content:`Continue the previous task from its saved progress. Re-read changed files and inspect Git/command history before acting. Do not repeat completed commands, commits, pushes, or applied edits. Saved plan and recent tool results (data): ${JSON.stringify({plan:resumeFrom.agentRun?.plan,checkpoint:resumeFrom.agentRun?.checkpoint})}`}]:[]),
         ],
       },
       session, signal: controller.signal,
@@ -428,6 +448,11 @@ async function stream(thread) {
         assistant.activity ||= []; assistant.activity.push(text); dirty = true;
       },
       onProposal(proposal) { assistant.proposals ||= []; assistant.proposals.push(proposal); dirty = true; },
+      onPlan(plan) { assistant.agentRun.plan = plan; dirty = true; },
+      async onCheckpoint(checkpoint) {
+        assistant.agentRun.checkpoint = {round:checkpoint.round,messages:checkpoint.messages.slice(-12).map(m=>({...m,content:typeof m.content==='string'?m.content.slice(0,12000):m.content}))};
+        await saveThread(thread);
+      },
     });
   } catch (err) {
     if (err.name === 'AbortError') {
@@ -444,6 +469,8 @@ async function stream(thread) {
     const secs = (performance.now() - started) / 1000;
     if (tokens > 1) assistant.stats = `${tokens} tok · ${secs.toFixed(1)}s · ${(tokens / secs).toFixed(1)} tok/s`;
     assistant.streaming = false;
+    assistant.agentRun.status = assistant.error ? 'failed' : assistant.content.endsWith('_(stopped)_') ? 'stopped' : assistant.proposals?.length ? 'awaiting_review' : 'completed';
+    assistant.agentRun.finishedAt = Date.now();
 
     paintBody(body, assistant);
     await saveThread(thread).catch(() => {});
@@ -571,3 +598,15 @@ window.addEventListener('workspace-context', (event) => {
   renderAttachments();
   dom.prompt.focus();
 });
+
+window.addEventListener('agent-change-result',async event=>{
+  const result=event.detail;
+  for(const thread of threads){
+    let changed=false;
+    for(const message of thread.messages)for(const proposal of message.proposals||[])if(proposal.changeset?.id===result.id){proposal.changeset=result;changed=true;}
+    if(changed)await saveThread(thread).catch(()=>{});
+  }
+  if(!controller)renderMessages();
+});
+
+window.addEventListener('workspace-access-changed',()=>controller?.abort());
